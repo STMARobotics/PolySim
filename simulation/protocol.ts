@@ -11,6 +11,8 @@ export interface InputFrame {
     controls: Controls;
 }
 export interface Snapshot {
+    fieldInventory?: {element:string;pieces:{id:string;type:string}[]}[];
+    subsystems?: import('./states').ActiveGeometry[];
     tick: number;
     running: boolean;
     pose: {
@@ -19,6 +21,7 @@ export interface Snapshot {
         yaw: number;
     };
     pieces: {
+        type?: string;
         id: string;
         position: Vec3;
         rotation: [

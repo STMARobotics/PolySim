@@ -307,3 +307,49 @@ input,select,.field input,.field select,.inspector-section input,.inspector-sect
 .inspector-section .two-buttons:has([data-field="surface.unitsX"]) .field{min-width:0}
 
 .automatic-link{font-size:13px;line-height:1.5;margin:8px 0 12px;color:#b7ccea}.graph-edge.automatic .edge-line{stroke:#d4b85a;stroke-dasharray:5 3}
+
+.state-section{border-bottom:1px solid #35466b}.state-toggle{font-family:Geo,sans-serif;text-transform:uppercase;width:100%;display:flex;justify-content:space-between;align-items:center;padding:10px 14px;text-align:left;font-size:18px}.state-toggle small{font:11px 'Mona Sans',sans-serif;text-transform:none;color:#ffdc55}.state-properties{padding:10px 14px;display:grid;gap:9px;background:#121c30}.state-properties h3{font-family:Geo,sans-serif;text-transform:uppercase;margin:8px 0 0}.state-action-row{text-align:left;padding:5px;color:#a9cbff}.add-state{margin:10px;width:calc(100% - 20px)}.graph-mode-tabs{display:flex;gap:4px}.graph-mode-tabs button{font-family:Geo,sans-serif;text-transform:uppercase;font-size:18px}.graph-mode-tabs .active{color:#ffdc55;border-bottom:2px solid #ed4c5e}.restart-drive{display:none!important}[data-view=drive] .restart-drive{display:block!important}.state-properties .help-text{margin:0}[data-drag-action]{cursor:grab}[data-drag-action]:active{cursor:grabbing}
+
+.graph-mode-tabs .text-button,.state-toggle,.state-properties h3{font-family:Geo,sans-serif!important;text-transform:uppercase!important}
+
+/* Typography contract: Geo for structure, Mona Sans for values and graph details. */
+#app .graph-mode-tabs button,#app .state-toggle,#app .state-toggle>span,#app .state-properties h3,#app .tree-state>span,#app .tree-action>span,#app .state-action-row,#app [data-drag-action],#app .add-state,#app .restart-drive,#app .properties-heading #inspector-name{font-family:Geo,sans-serif!important;text-transform:uppercase!important;font-weight:400;letter-spacing:.035em;line-height:1.05}
+#app .state-toggle{font-size:21px}#app .state-toggle>span{font-size:inherit}
+#app .graph-mode-tabs button{font-size:21px}
+#app .state-properties h3{font-size:21px;color:#ffd84b}
+#app [data-drag-action],#app .add-state,#app .restart-drive{font-size:19px}
+#app .state-properties .field,#app .state-properties .field>span,#app .state-properties input,#app .state-properties select,#app .state-properties .check-field,#app .state-properties .help-text,#app .state-toggle small,#app .node-name,#app .node-kind,#app .node-info,#app .graph-edge text{font-family:"Mona Sans",sans-serif!important;text-transform:none;letter-spacing:.015em}
+#app .state-properties .field>span,#app .state-properties .vector-label{font-size:13px;color:#a7bdd9}
+#app .state-properties input:not([type=checkbox]),#app .state-properties select{font-size:14px;min-height:28px;line-height:1;padding:4px 7px}
+#app .three-fields .axis-field{display:grid;grid-template-columns:12px minmax(0,1fr);align-items:center;gap:4px;margin:0;min-width:0}
+#app .three-fields .axis-field>span{margin:0;font-size:13px}
+#app .three-fields .axis-field input{min-width:0;width:100%;padding:4px;text-align:center}
+#app .properties-heading{padding:0 10px;min-height:34px;height:34px}
+#app .properties-heading #inspector-name{background:transparent;border:1px solid transparent;box-shadow:none;outline-offset:0;width:100%;min-height:28px;padding:2px 4px;color:#f4f6ff;font-size:23px}
+#app .properties-heading #inspector-name:hover,#app .properties-heading #inspector-name:focus{border-color:#517db7;background:#10233e}
+.tree-state-group{margin:1px 0 3px 13px;border-left:1px solid #304969;padding-left:5px}
+#app .tree-state{display:flex;align-items:center;gap:6px;width:100%;min-height:26px;text-align:left;padding:3px 5px;color:#c7d9ef}
+#app .tree-state>span{font-size:19px}
+#app .tree-state>span:last-child,#app .state-toggle>span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#app .state-toggle{gap:6px}#app .state-toggle small{flex:none}
+#app .tree-state .state-marker{font-size:11px;color:#ffd84b;width:12px;text-align:center;flex:none}
+#app .tree-state.selected{background:#204576;color:#ffe044;border:1px solid #3e77b8}
+#app .tree-action{width:100%;padding-left:24px;min-height:24px;text-align:left}
+#app .tree-action>span{font-size:18px}
+#app .state-action-row{font-size:18px;text-align:left}
+[data-drag-action]{touch-action:none;user-select:none;cursor:crosshair}
+body.assigning-action,body.assigning-action *{user-select:none!important;cursor:crosshair!important}
+.action-beam-overlay{position:fixed;inset:0;z-index:2147483646;pointer-events:none;overflow:hidden}
+.action-beam-overlay svg{display:block;width:100%;height:100%;overflow:visible}
+.action-beam-overlay .beam-glow{fill:none;stroke:#5da8ff;stroke-width:15;opacity:.25;filter:blur(5px)}
+.action-beam-overlay .beam-ribbon{fill:url(#action-beam-gradient);opacity:.7}
+.action-beam-overlay .beam-core{fill:none;stroke:#edf8ff;stroke-width:1.5;opacity:.95;filter:drop-shadow(0 0 5px #8ecaff)}
+.action-beam-overlay .beam-tip{fill:#0d233e;stroke:#6cb7ff;stroke-width:2.5}
+.action-beam-overlay.snapped .beam-tip{fill:#ffda45;stroke:#fff4bd;filter:drop-shadow(0 0 8px #ffd347)}
+.action-beam-overlay.snapped .beam-glow{stroke:#ffdb49}
+
+.inspector-scopes{display:flex;align-items:center;gap:7px;height:100%}
+#app .inspector-scopes .scope-tab{font-family:Geo,sans-serif!important;text-transform:uppercase;font-size:21px;font-weight:400;letter-spacing:.035em;line-height:1;padding:2px 4px;color:#b8cce6;border-radius:0}
+#app .inspector-scopes .scope-tab.active{color:#ffe044;border-bottom:2px solid #ffe044}
+#app .port-label{font:10px "Mona Sans",sans-serif!important;text-transform:none;fill:#b8cce6;pointer-events:none}
+.scoring.swatch{background:#ffd348}

@@ -23,7 +23,7 @@ test('pause/reset snapshots snap to their exact pose and clear interpolation his
     assert.equal(frames.alpha(110),1); assert.equal(frames.previous!.pose.x,8);
     frames.push(frame(0),120);
     assert.equal(frames.alpha(120),1); assert.equal(frames.previous!.pose.x,0);
-    assert.deepEqual(Object.keys(frames.current!).sort(),['pieces','pose','tick']);
+    assert.deepEqual(Object.keys(frames.current!).sort(),['pieces','pose','subsystems','tick']);
     frames.clear(); assert.equal(frames.current,undefined); assert.equal(frames.previousPieces.size,0);
 });
 

@@ -5,6 +5,7 @@ import {Template,Match} from 'aws-cdk-lib/assertions';
 import {BackendStack,CertificateStack,FrontendStack} from '../lib/stacks';
 import {production} from '../lib/config';
 import {readFileSync,readdirSync} from 'node:fs';
+import {ENGINE_VERSION} from '../../contracts/model';
 const app=new App({context:{'@aws-cdk/core:defaultCrossStackReferences':'strong'}}),env={account:production.account,region:production.region};
 const edge=new CertificateStack(app,'test-certificate',{env:{...env,region:'us-east-1'},crossRegionReferences:true});
 const backend=new BackendStack(app,'test-backend',{env,crossRegionReferences:true});
@@ -50,5 +51,9 @@ test('production entry is the login gate and lazy-loads the editor only after au
     const html=readFileSync('dist/index.html','utf8'), entry=html.match(/src="([^\"]+\.js)"/)![1];
     const code=readFileSync('dist'+entry,'utf8');assert.ok(code.includes('/api/auth/session'));assert.ok(code.includes('Sign in with Google'));assert.ok(code.includes('stmarobotics.org accounts only'));
     assert.ok(!code.includes('new WebGLRenderer'));assert.ok(readdirSync('dist/assets').some(f=>f.startsWith('main-')));
+    const worker=readdirSync('dist/assets').find(file=>/^worker-.*\.js$/.test(file));assert.ok(worker,'Production worker is published with the authenticated app');
+    const physics=readFileSync(`dist/assets/${worker}`,'utf8');assert.ok(physics.includes('setCollisionGroups'));
+    assert.ok(frontend.dependencies.includes(backend),'Backend capabilities deploy before their frontend');
     for(const dir of ['auth','robots','seasons']) {const lambda=readFileSync(`service-dist/${dir}/index.js`,'utf8');assert.ok(!lambda.includes('class MemoryStore'));assert.ok(!lambda.includes('test-code'));}
+    assert.ok(readFileSync('service-dist/seasons/index.js','utf8').includes(ENGINE_VERSION),'Production manifest identifies the current engine');
 });

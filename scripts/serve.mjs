@@ -18,7 +18,7 @@ try { await stat(resolve(root, 'index.html')); } catch { console.error('Build mi
 const server = createServer(async (req, res) => {
   try {
     const pathname = decodeURIComponent(new URL(req.url, 'http://localhost').pathname);
-    if (pathname === '/health') { res.writeHead(200, { 'Content-Type':'application/json' }); res.end(JSON.stringify({app:'polysim',version:'0.8.0'})); return; }
+    if (pathname === '/health') { res.writeHead(200, { 'Content-Type':'application/json' }); res.end(JSON.stringify({app:'polysim',version:'0.16.0'})); return; }
     let file = resolve(root, '.' + pathname);
     if (file !== root && !file.startsWith(root.endsWith(sep) ? root : root + sep)) { res.writeHead(403); res.end(); return; }
     if (pathname === '/') file = resolve(root, 'index.html');

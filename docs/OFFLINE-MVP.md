@@ -5,7 +5,7 @@ This is the first development slice of the supplied FRC simulator design. The us
 ## Implemented
 
 - TypeScript frontend, independent Three.js viewport, Rapier 3D simulation host (worker or in-page compatibility mode), and framework-independent timed graph scheduler.
-- One developer-authored `Practice Lab` ball fixture, fixed initial setup, continuous Drive sessions, 120 Hz physics. No official-season or legality claim.
+- Developer-authored `Practice Lab` and blocky 2025 REEFSCAPE fixtures, continuous Drive sessions and 120 Hz physics. Geometry and scoring are approximate; no official match-rule or legality claim.
 - Rectangular subsystem boxes; numeric position/dimensions/yaw/capacity/collision editing; 3D move/resize handles and inch-based property inputs; deletion and duplication; undo/redo.
 - Named intake/outtake face groups, distinct colors and text labels, transition bindings and hold/press triggers, minimum action intervals, speed/direction/spin editing, explicit release face.
 - Directed graph with draggable nodes, pan/zoom/fit, port connections, transfer latency, binding, priority, concurrency, token progress, owner inventory, reservations and capacity wait diagnostics.
@@ -77,3 +77,55 @@ Display units: linear values in inches, speeds in in/s, acceleration in in/s², 
 ## 0.8 hosted backend
 
 The offline scope above is retained for the explicit offline build. The default build is now the authenticated hosted app: Google Workspace OIDC, server-side opaque sessions and a shared DynamoDB robot library with immutable revisions. AWS/CDK configuration, release gates and exact supported API scope are documented in BACKEND.md. No live production deployment has been performed in this workspace.
+
+## 0.9 state editing
+
+- Named subsystem states contain geometry (including pitch/roll), capacity, collision behavior and state-specific actions. Exactly one default is mandatory. UI accordion allows one open state; state list order is immaterial.
+- States graph is scoped to one selected subsystem, with draggable nodes/ports, bindings, trigger modes and timed transitions. Smoothstep geometry changes run at 120 Hz and interpolate visually between snapshots. Collision shapes follow the same geometry.
+- Transitions reserve the lower capacity while moving; blocked capacity or in-use action pieces prevent a switch. State action routes are inactive during movement; no pieces are deleted or teleported by a state change.
+- Solid boxes are the default for newly created robots. Legacy solid flags migrate without changes. Ignore collision is the inverse property exposed in each state.
+- Inches inputs step by 0.5; speed is m/s and acceleration m/s². Drag-and-drop face assignment replaces the subsystem face dropdown. Launch previews cover all faces, 3D rotations, active outtakes and grid cells. Preview excludes collision and inherited drive/actuator velocities.
+- Drive Restart resets the original design's defaults and the entire fixture.
+
+## 0.10 editor refinements
+
+- Editable linear geometry accepts only half-inch multiples, including imported designs, API saves and live 3D move/resize handles. Non-grid numeric input rounds on application; bounds also lie on the grid.
+- The properties heading is the editable subsystem name; its redundant name section is removed. Vector labels sit beside their inputs.
+- All state names end in exactly one ` State` suffix. The inspector tree lists every subsystem, its states and all state-owned actions, including duplicate action names.
+- Geo remains the structural typeface for headings, navigation and action controls; Mona Sans retains normal capitalization for property and graph details.
+- Action assignment uses a raised, tapered beam from the stationary button to the cursor, snapping to a visible available face. Escape, pointer cancellation or focus loss cancels assignment. No native dragged-button image is used.
+
+## 0.11 released-key transitions
+
+- State and Travel Path trigger selectors include Not Pressed. It continuously permits new work while the assigned key is released, including at startup.
+- Shared trigger evaluation covers state transitions, subsystem transfers, intake capture and outtake staging. Existing timing, capacity, cooldown and state-activity rules remain in force.
+- Trigger values round-trip through JSON and the authenticated API. The client checks the server's `not-pressed-trigger` capability before saving a design that uses it.
+
+## 0.12 subsystem targeting
+
+- Subsystem-level Targeting Mode: Turret, SOTM Turret, Aim with Drivetrain and Manual (default). Old designs migrate to Manual; copies retain settings.
+- Turrets rotate about the vertical axis through their centers. Both modes limit yaw to half of the configured total degrees of freedom on either side of startup yaw. Reference yaw remains fixed across state changes. Visual interpolation respects bounded intervals.
+- Targets come from the trusted field manifest. The nearest valid target is selected; the practice fixture currently has one basket. Outtake launch orientation is respected. SOTM iterates horizontal time of flight with inherited translation and angular point velocity; speed and elevation remain configured by the user.
+- Drivetrain aiming engages for the subsystem's active-state actions while their input is engaged, or while their transfers remain pending. Press keys keep aiming engaged while held. Driver translation is retained; normal turn control returns after disengagement.
+- Runtime, collider and rendered yaw agree. Automatic targeting preserves saved geometry, supports deterministic replay and resets with Drive Restart. API saves retain mode/range and require the advertised subsystem-targeting capability.
+- Targeting does not check obstruction or ballistic reachability, change elevation/speed, or wait for alignment before firing. Dotted setting previews retain their existing no-inherited-motion limitation.
+
+## 0.13 season fields and typed pieces
+
+REEFSCAPE adds trusted fixed block geometry, Coral/Algae physics and editable capacity-based scoring prisms. Robot/Field tabs share the inspector header. Scoring surfaces consume compatible pieces on contact, retain inventory and award configurable points. Human-player releases support proximity and continuous cooldowns. Travel Path ports/routes are typed per season; action compatibility, shared capacity and state copying retain those types. Robots are season-bound and the API validates/preserves field settings. Browser recovery starts in a fresh v2 namespace. See REEFSCAPE-2025.md for exact implemented scope, default values, sources and approximations.
+
+## 0.16 pile collision performance
+
+- Collision groups route Coral-to-piece and flat-floor contacts through one outer cylinder, avoiding wall-pair multiplication. Robot/obstacle contact retains an open 24-box wall shell with <0.5 mm outer-radius excess. Fine scoring/clearance geometry remains 48 parts and scene queries omit the envelope.
+- Small-piece seasons fall back to wall contacts. CCD, 120 Hz physics, mass, bounciness and typed ownership remain intact. Unchanged subsystem transforms are cached.
+- `npm run benchmark:piles` reproduces crowded 18/36-piece driving cases. See PILE-PERFORMANCE.md for measurements, contact approximations and browser FPS limitations. Engine version is 0.11.0.
+
+## 0.15 direct scoring placements
+
+- Outtake release tests assigned scoring faces before requiring physical spawn clearance. The actual piece shape is swept from the action face to its candidate release position; compatible receivers with room take ownership directly without spawning an overlapping body.
+- Full or incompatible touching receivers retain ownership in the robot and identify the rejection reason. An eligible overlapping receiver takes priority. Other physical outtakes retain their collision checks.
+- Transfers preserve IDs, types, points, capacity, cycle timing, trigger/delay behavior and shared batch cooldown. Coral contact tests retain the open bore. Engine version is 0.10.0; saved document schemas are unchanged.
+
+## 0.14 field interaction and piece fidelity
+
+Field-mode ray picking selects scoring elements directly. Source cubes are replaced by non-rendered transform anchors; hanging cage centers and default nets align on the field centerline. Driver cameras move close behind the wall and slightly higher. Coral uses a hollow 48-part convex compound collider and a smooth open pipe mesh; Algae uses an analytic sphere collider and smooth mesh. All compound parts participate in scoring and release-clearance checks. Per-type 0–1 bounciness settings live in Field overview and persist through saves, initial staging, sources and outtakes.

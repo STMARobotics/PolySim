@@ -5,11 +5,12 @@ import { graphNode, nodePosition } from '../ui/graph-model';
 import { nextNodePosition } from '../ui/editor-model';
 import { sampleRobot } from '../seasons/practice';
 
-test('inch inputs convert to physical geometry, wheel diameter, speed and acceleration', () => {
-    for (const path of ['sub.position.0', 'sub.size.2', 'basics.length', 'basics.width', 'basics.height', 'basics.wheelDiameter', 'basics.loadedSpeed', 'basics.acceleration', 'surface.speed']) {
+test('inch dimensions retain SI storage while speed and acceleration use SI display units', () => {
+    for (const path of ['sub.position.0', 'sub.size.2', 'basics.length', 'basics.width', 'basics.height', 'basics.wheelDiameter']) {
         assert.equal(displayValue(path, .0254), 1);
         assert.ok(Math.abs(storedValue(path, 12.5) - .3175) < 1e-10);
     }
+    for(const path of ['basics.loadedSpeed','basics.acceleration','surface.speed']){assert.equal(displayValue(path,2.5),2.5);assert.equal(storedValue(path,2.5),2.5);}
     assert.equal(displayValue('basics.wheelDiameter', sampleRobot().basics.wheelDiameter), 4);
     assert.equal(displayValue('edge.duration', .25), .25);
     assert.equal(storedValue('sub.capacity', 3), 3);
@@ -45,8 +46,8 @@ test('new graph modules leave room for square cards across successive additions'
 });
 
 test('measurement validation bounds use the same display units as inspector inputs', () => {
-    assert.equal(displayIssue('Chassis dimensions must be at most 3 m.'), 'Chassis dimensions must be at most 118.11 in.');
-    assert.equal(displayIssue('Dimension must be between 0 and 3.'), 'Dimension must be between 0 and 118.11 in.');
-    assert.equal(displayIssue('Exit speed must be between 0 and 50.'), 'Exit speed must be between 0 and 1968.50 in/s.');
+    assert.equal(displayIssue('Chassis dimensions must be at most 3 m.'), 'Chassis dimensions must be at most 118 in.');
+    assert.equal(displayIssue('Dimension must be between 0 and 3.'), 'Dimension must be between 0 and 118.00 in.');
+    assert.equal(displayIssue('Exit speed must be between 0 and 50.'), 'Exit speed must be between 0 and 50.00 m/s.');
     assert.equal(displayIssue('Capacity must be an integer from 1 to 100.'), 'Capacity must be an integer from 1 to 100.');
 });

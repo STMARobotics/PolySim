@@ -1,6 +1,8 @@
 import { DT, ownerOf, ticksFor, syncSurfaceLinks, surfaceForEdge, clone, type Edge, type RobotDocument } from '../contracts/model';
-import { normalizeBinding } from '../contracts/bindings';
+import {triggerActive} from '../contracts/triggers';
+import {pieceTypesFor,acceptedTypes} from '../seasons/registry';
 export interface Token {
+    pieceType?: string;
     id: string;
     node: string;
     owner: string;
@@ -33,17 +35,18 @@ export class GraphEngine {
         for (const e of this.document.edges) {
             this.metrics[e.id] = { deliveries: 0, busyTicks: 0, capacityTicks: 0, inputTicks: 0, emptyTicks: 0 };
             const surface = surfaceForEdge(this.document, e);
-            if (surface) this.links.set(surface.id, e);
+            if (surface) this.links.set(surface.id+':'+(e.pieceType ?? pieceTypesFor(this.document)[0].id), e);
         }
     }
-    transition(surfaceId: string) { return this.links.get(surfaceId)!; }
+    transitions(surfaceId:string) {return [...this.links.values()].filter(e=>e.source===surfaceId||e.target===surfaceId);}
+    transition(surfaceId: string,pieceType=pieceTypesFor(this.document)[0].id) { return this.links.get(surfaceId+':'+pieceType)!; }
     owned(owner: string) { return [...this.tokens.values()].filter(t => t.owner === owner).length; }
     reserved(owner: string) { return [...this.tokens.values()].filter(t => t.flight?.owner === owner && t.owner !== owner).length; }
     available(owner: string) { return this.owned(owner) + this.reserved(owner) < (this.document.subsystems.find(s => s.id === owner)?.capacity ?? 0); }
-    capture(id: string, surfaceId: string, tick: number): boolean {
-        const surface = this.document.surfaces.find(s => s.id === surfaceId && s.type === 'intake'), link = this.links.get(surfaceId);
+    capture(id: string, surfaceId: string, tick: number,pieceType=pieceTypesFor(this.document)[0].id): boolean {
+        const surface = this.document.surfaces.find(s => s.id === surfaceId && s.type === 'intake'), link = this.transition(surfaceId,pieceType);
         if (!surface || !link || this.tokens.has(id) || !this.available(surface.owner)) return false;
-        const token: Token = {id, node: link.duration === 0 ? surface.owner : surface.id, owner: surface.owner, arrived: tick, captured: tick};
+        const token: Token = {id,pieceType,node: link.duration === 0 ? surface.owner : surface.id, owner: surface.owner, arrived: tick, captured: tick};
         if (link.duration > 0) {
             token.flight = {edge:link.id,target:surface.owner,owner:surface.owner,start:tick,end:tick+ticksFor(link.duration)};
             this.metrics[link.id].busyTicks++;
@@ -51,7 +54,7 @@ export class GraphEngine {
         this.tokens.set(id, token);
         return true;
     }
-    tick(tick: number, held: Set<string>, pressed: Set<string>) {
+    tick(tick: number, held: Set<string>, pressed: Set<string>, enabledAction: (surface: {owner:string;stateId?:string})=>boolean = ()=>true) {
         const ordered = [...this.tokens.values()].sort((a, b) => (a.flight?.end ?? Infinity) - (b.flight?.end ?? Infinity) || a.id.localeCompare(b.id));
         for (const t of ordered) if (t.flight && t.flight.end <= tick) {
             const flight = t.flight;
@@ -59,12 +62,12 @@ export class GraphEngine {
             this.metrics[flight.edge].deliveries++;
         }
         for (const s of this.document.surfaces.filter(s=>s.type==='intake')) {
-            const link = this.links.get(s.id)!;
-            if ([...this.tokens.values()].some(t=>t.flight?.edge===link.id)) this.metrics[link.id].busyTicks++;
+            for(const link of this.transitions(s.id))if ([...this.tokens.values()].some(t=>t.flight?.edge===link.id)) this.metrics[link.id].busyTicks++;
         }
         const available = [...this.tokens.values()].filter(t => !t.flight).sort((a, b) => a.arrived - b.arrived || a.id.localeCompare(b.id));
         for (const e of this.transfers) {
             const m = this.metrics[e.id], action = surfaceForEdge(this.document,e);
+            if (action && !enabledAction(action)) continue;
             const active = [...this.tokens.values()].filter(t => t.flight?.edge === e.id).length;
             if (active) m.busyTicks++;
             let limit = e.concurrency - active;
@@ -74,9 +77,9 @@ export class GraphEngine {
                 if (tick < (this.nextBatch.get(action.id) ?? 0)) continue;
             }
             if (limit <= 0) continue;
-            const candidates = available.filter(t=>t.node===e.source && !t.flight).slice(0,action ? limit : 1);
+            const candidates = available.filter(t=>t.node===e.source && !t.flight && (t.pieceType ?? pieceTypesFor(this.document)[0].id)===(e.pieceType ?? pieceTypesFor(this.document)[0].id)).slice(0,action ? limit : 1);
             if (!candidates.length) { m.emptyTicks++; continue; }
-            if (!(e.trigger === 'hold' ? held : pressed).has(normalizeBinding(e.key)!)) {m.inputTicks++;continue;}
+            if (!triggerActive(e.trigger,e.key,held,pressed)) {m.inputTicks++;continue;}
             let started = 0;
             for (const token of candidates) {
                 const owner = ownerOf(this.document, e.target)!;

@@ -4,11 +4,11 @@ import { stationCameraPosition, trackingFactor, configureEditOrbit } from '../ui
 import * as THREE from 'three';
 import { Viewport } from '../ui/viewport';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-test('driver stations are fixed behind the alliance wall at human eye height', () => {
+test('driver stations are fixed close behind the alliance wall at raised driver eye height', () => {
     for (const station of [1, 2, 3] as const) {
         const p = stationCameraPosition(station);
         assert.ok(p[0] < -6);
-        assert.equal(p[2], 1.65);
+        assert.equal(p[2], 1.9);assert.ok(Math.abs(p[0]+6+.3)<1e-10);
     }
     assert.equal(stationCameraPosition(2)[1], 0);
     assert.ok(stationCameraPosition(1)[1] > 0);

@@ -58,7 +58,7 @@ List APIs are paginated, at most 50 items per request. Cursors are scoped to the
 | GET | `/api/auth/callback` | Verify callback and create session |
 | GET | `/api/auth/session` | User, expiration and CSRF token; otherwise 401 |
 | POST | `/api/auth/logout` | CSRF-protected revocation |
-| GET | `/api/seasons`, `/api/seasons/{id}` | Bundled read-only Practice Lab manifest |
+| GET | `/api/seasons`, `/api/seasons/{id}` | Bundled read-only REEFSCAPE and Practice Lab manifests |
 | GET | `/api/robots?seasonId=practice-balls&limit=20&cursor=...` | Shared active library |
 | POST | `/api/robots` | Create `{document}` with `Idempotency-Key` |
 | GET | `/api/robots/{id}` | Current metadata and document |
@@ -112,3 +112,29 @@ Release gates still requiring actual AWS/Google access:
 - Review dependency advisories and deployment diff; verify costs, quota headroom and the approved admin subject list.
 
 Dependency audit at implementation: `npm audit --omit=dev` reports zero advisories. Full audit reports a moderate `minimatch` glob-amplification advisory ([GHSA-g3hv-75wg-m249](https://github.com/advisories/GHSA-g3hv-75wg-m249)) in the current CDK package's bundled tooling. Downgrading CDK introduced additional high-severity tooling advisories and was rejected. CDK only processes this repository's trusted build paths and is not bundled in the Lambda runtime or frontend. Track the upstream fix and update the pinned CDK release; do not describe the full development toolchain as advisory-free.
+
+## Release verification (0.16)
+
+[Release verification details](RELEASE-0.16.md) record the clean install, production dependency audit, 170-test suite, published-worker execution, hosted document round trip, builds and CDK synthesis. The lockfile's nested Rapier development dependency checksum was corrected against npm metadata; application physics remains on 0.19.3. On November 20, 2026 the public hostname returned ENOTFOUND, and this workspace had no AWS credentials. The source can be pushed after verification, but live deployment/login/DynamoDB/alert/restore checks remain outstanding. Pushing main triggers CI; deployment remains a separate manual workflow.
+
+## State documents (0.9)
+
+Robot schema v1 now includes optional named subsystem states, state transitions/layout and state-specific action references. Legacy robots migrate to a Default state while preserving prior collision flags. The backend validates exactly one default per subsystem, bounds the new collections and retains the definitions in immutable revisions. The season manifest advertises `subsystem-states`; the frontend checks this capability before saving so an older backend cannot silently strip state definitions. Deploy the backend before the new frontend; the CDK stack dependency enforces this order when deploying all stacks.
+
+## Not Pressed triggers (0.11)
+
+State and Travel Path transitions accept `not-pressed` in addition to `hold` and `press`. The manifest advertises `not-pressed-trigger`; the frontend checks for this capability before saving a design that uses it. Deploy the updated backend before the frontend. The offline bundle uses the same trigger evaluation locally and needs no backend deployment.
+
+## Targeting settings (0.12)
+
+Subsystems retain optional targetingMode and targetingFreedom fields. Modes are manual, turret, sotm-turret and aim-with-drivetrain. Freedom is a total angular range in radians from 0 to 2π; the inspector displays degrees. Missing settings migrate to Manual and 360°. The API bounds and preserves both fields. The season manifest advertises subsystem-targeting, which the frontend requires before saving automatic targeting or a non-default stored range. Deploy the backend before the frontend. No deployment was performed as part of this local update.
+
+## Season fields and typed pieces (0.13)
+
+`GET /api/seasons` lists REEFSCAPE and Practice Lab; authenticated season detail endpoints expose trusted fixed geometry, piece definitions and default editable field settings. Manifest geometry uses SI with inch display units. Robot documents can contain field.scoringElements and field.sources, action accepts arrays and per-edge pieceType. The API bounds these collections, validates type compatibility and rejects geometry injected into editable field settings. Existing robot season IDs remain immutable, and listing/cursors stay isolated by season.
+
+Clients require season-field-v1 and typed-pieces capabilities for the new season. Deploy the updated backend before publishing its frontend. The explicit offline build includes the same trusted season fixtures locally. Browser recovery moves to v2 and does not attempt to recover the old local workspace. No AWS deployment was performed for this update.
+
+## Piece physics settings (0.14)
+
+Field configuration accepts an optional bounciness record keyed by valid piece types for that robot's season. Values must be finite numbers from 0 to 1; missing values default to 0.35. The API preserves these settings in immutable robot revisions and advertises piece-physics-v2. The client refuses to save these settings to an older backend that would discard them. Existing browser data remains in the v2 namespace. REEFSCAPE fixture version 1.1.0 centers hanging elements and uses hollow Coral geometry; engine version 0.9.0 identifies the changed collision behavior.

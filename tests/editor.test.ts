@@ -51,6 +51,6 @@ test('inventory shading fills upward by occupancy including empty, full and clam
     assert.equal(inventoryFraction(-1, 3), 0);
 });
 test('3D scale converts to editable dimensions while respecting valid size bounds', () => {
-    assert.deepEqual(resizedDimensions([.3, .4, .5], [2, 1, .5]), [.6, .4, .25]);
-    assert.deepEqual(resizedDimensions([.3, .4, .5], [-1, 100, 0]), [.05, 3, .05]);
+    assert.deepEqual(resizedDimensions([.3, .4, .5], [2, 1, .5]), [.5969, .3937, .254]);
+    assert.deepEqual(resizedDimensions([.3, .4, .5], [-1, 100, 0]), [.0127, 2.9972, .0127]);
 });
