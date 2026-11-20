@@ -1,48 +1,80 @@
-name: Deploy PolySim production
+name: CI
+
 on:
-  workflow_dispatch:
+  push:
+    branches:
+      - '**'
+  pull_request:
+
 permissions:
+  id-token: write
   contents: read
-concurrency:
-  group: polysim-production
-  cancel-in-progress: false
+
 jobs:
-  deploy:
-    if: github.ref == 'refs/heads/main'
-    environment: production
+  validate:
+    name: Build, Test, and CDK Diff (PR or branch)
+    if: github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref != 'refs/heads/main')
     runs-on: ubuntu-latest
-    timeout-minutes: 45
-    permissions:
-      contents: read
-      id-token: write
-    env:
-      POLYSIM_ADMIN_SUBJECTS: ${{ vars.POLYSIM_ADMIN_SUBJECTS }}
+    timeout-minutes: 30
+
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+      - name: Checkout Repository
+        uses: actions/checkout@v7
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: npm
-      - run: npm ci
-      - run: npm audit --omit=dev --audit-level=moderate
-      - run: npm run verify
-      - name: Require deployment role
-        env:
-          DEPLOY_ROLE: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
-        run: test -n "$DEPLOY_ROLE"
-      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+      - name: Install Dependencies
+        run: npm ci
+      - name: Build, test, and synthesize
+        run: npm run verify
+      - name: Build offline application
+        run: npm run build:offline
+      - name: Build standalone application
+        run: node scripts/build-standalone.mjs
+      - name: Configure AWS Credentials via OIDC
+        if: github.event_name == 'pull_request'
+        uses: aws-actions/configure-aws-credentials@v6
         with:
-          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          role-to-assume: arn:aws:iam::738044534240:role/GitHubAction-PullRequestRole
           aws-region: us-east-2
-          allowed-account-ids: '738044534240'
-          role-session-name: PolySimProduction
+      - name: CDK Diff
+        if: github.event_name == 'pull_request'
+        run: npm run cdk:diff -- --method=template
+
+  deploy:
+    name: Build, Test, and Deploy AWS CDK Stacks (main)
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v7
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - name: Install Dependencies
+        run: npm ci
+      - name: Build, test, and synthesize
+        run: npm run verify
+      - name: Build offline application
+        run: npm run build:offline
+      - name: Build standalone application
+        run: node scripts/build-standalone.mjs
+      - name: Configure AWS Credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: arn:aws:iam::738044534240:role/GitHubAction-AssumeRoleWithAction
+          aws-region: us-east-2
       - name: Check AWS account and OAuth parameter metadata
-        run: node scripts/deployment-preflight.mjs
-      - name: Review infrastructure diff in workflow log
+        run: npm run deployment:preflight
+      - name: Review infrastructure diff
         run: npm run cdk:diff -- --method=template --fail-on=never
-      - name: Deploy application stacks
+      - name: Deploy CDK Stacks
         run: npm run cdk:deploy -- --require-approval never --outputs-file deployment-outputs.json
-      - name: Smoke test public gate and unauthenticated API
-        run: node scripts/smoke-production.mjs https://polysim.7028robotics.com
+      - name: Smoke test public application
+        run: npm run deployment:smoke

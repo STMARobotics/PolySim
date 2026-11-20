@@ -21,6 +21,8 @@
     "cdk:synth": "cdk synth",
     "cdk:diff": "cdk diff \"*\"",
     "cdk:deploy": "cdk deploy --all",
+    "deployment:preflight": "node --import tsx scripts/deployment-preflight.mjs",
+    "deployment:smoke": "node --import tsx scripts/smoke-production.mjs",
     "verify": "npm run check && npm test && npm run test:backend && npm run build && npm run test:infra && npm run cdk:synth",
     "build:backend": "node scripts/build-backend.mjs",
     "build:frontend": "vite build"
