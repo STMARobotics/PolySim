@@ -70,7 +70,7 @@ jobs:
         with:
           role-to-assume: arn:aws:iam::738044534240:role/GitHubAction-AssumeRoleWithAction
           aws-region: us-east-2
-      - name: Check AWS account and OAuth parameter metadata
+      - name: Check AWS account and region
         run: npm run deployment:preflight
       - name: Review infrastructure diff
         run: npm run cdk:diff -- --method=template --fail-on=never

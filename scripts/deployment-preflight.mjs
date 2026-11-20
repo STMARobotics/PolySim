@@ -1,10 +1,9 @@
-// Read-only: validates credentials and secret metadata, never prints the secret value.
+// Read-only: validates the deployment account and region.
 import {STSClient,GetCallerIdentityCommand} from '@aws-sdk/client-sts';
-import {SSMClient,GetParameterCommand} from '@aws-sdk/client-ssm';
 import {production} from '../cdk/lib/config.ts';
-const {region,account,googleSecretParameter}=production;
+const {region,account}=production;
+const configuredRegion=process.env.AWS_REGION ?? process.env.AWS_DEFAULT_REGION;
+if(configuredRegion!==region)throw Error('Wrong AWS region. Expected '+region);
 const identity=await new STSClient({region}).send(new GetCallerIdentityCommand({}));
 if(identity.Account!==account)throw Error('Wrong AWS account. Expected '+account);
-const metadata=await new SSMClient({region}).send(new GetParameterCommand({Name:googleSecretParameter,WithDecryption:false}));
-if(metadata.Parameter?.Type!=='SecureString')throw Error('Shared Google OAuth SecureString is missing or has the wrong type.');
-console.log('Verified AWS account, region and OAuth SecureString type. Its value was not decrypted or logged.');
+console.log('Verified AWS account and region. OAuth secret access remains with the auth Lambda.');
