@@ -2,10 +2,10 @@
   "Version": "2012-10-17",
   "Statement": [
     {
-      "Sid": "PolySimOAuthParameterMetadata",
+      "Sid": "PolySimOAuthParameterCheck",
       "Effect": "Allow",
-      "Action": "ssm:DescribeParameters",
-      "Resource": "*",
+      "Action": "ssm:GetParameter",
+      "Resource": "arn:aws:ssm:us-east-2:738044534240:parameter/polysim/google-client-secret",
       "Condition": {
         "StringEquals": {
           "aws:RequestedRegion": "us-east-2"

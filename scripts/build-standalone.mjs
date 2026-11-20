@@ -12,9 +12,11 @@ const script = html.match(/<script\b[^>]*src="([^"]+)"[^>]*><\/script>/);
 const stylesheet = html.match(/<link\b[^>]*rel="stylesheet"[^>]*href="([^"]+)"[^>]*>/);
 if (!script || !stylesheet) throw Error('Expected one Vite script and stylesheet. Run npm run build first.');
 let client = await readFile(resolve(project, buildDirectory, '.' + script[1]), 'utf8');
-const worker = client.match(/new URL\("(\/assets\/worker-[^"]+\.js)",import\.meta\.url\)/);
+// Vite 7 emits quoted paths; Vite 8/Rolldown emits template literals and may
+// coerce import.meta.url with an empty string. Embed either form completely.
+const worker = client.match(/new\s+URL\(\s*(["'`])(\/assets\/worker-[A-Za-z0-9_-]+\.js)\1\s*,\s*(?:(?:``|""|'')\s*\+\s*)?import\.meta\.url\s*\)/);
 if (!worker) throw Error('Could not locate the bundled simulation worker.');
-const workerBytes = await readFile(resolve(project, buildDirectory, '.' + worker[1]));
+const workerBytes = await readFile(resolve(project, buildDirectory, '.' + worker[2]));
 const workerBlob = `URL.createObjectURL(new Blob([Uint8Array.from(atob(${JSON.stringify(workerBytes.toString('base64'))}),c=>c.charCodeAt(0))],{type:"text/javascript"}))`;
 client = client.replace(worker[0], workerBlob);
 if (client.includes('import.meta.url')) throw Error('Unpackaged module URL remains.');

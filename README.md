@@ -40,7 +40,7 @@ Run `npm run benchmark:piles` for crowded 18/36-piece contact cases. The reprodu
 
 ## Hosted backend
 
-Deployment target: **https://polysim.7028robotics.com**, AWS account **738044534240**, backend region **us-east-2**, CloudFront certificate/WAF region **us-east-1**. This matches FMEA's public deployment coordinates and reuses its OAuth client and `/fmea/google-client-secret` SecureString. PolySim has independent stacks, tables, sessions and frontend storage.
+Deployment target: **https://polysim.7028robotics.com**, AWS account **738044534240**, backend region **us-east-2**, CloudFront certificate/WAF region **us-east-1**. This matches FMEA's public deployment coordinates and reuses its OAuth client and `/polysim/google-client-secret` SecureString. PolySim has independent stacks, tables, sessions and frontend storage.
 
 ```sh
 npm ci

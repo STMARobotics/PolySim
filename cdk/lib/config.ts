@@ -6,7 +6,7 @@ export const production = {
     domainName: '7028robotics.com', hostname: 'polysim.7028robotics.com',
     hostedZoneId: 'Z014656337LGZWAE9JKJP',
     googleClientId: '574028865613-kh9gccmi9ccfqsv7s89rdttf7cc1ohj4.apps.googleusercontent.com',
-    googleSecretParameter: '/fmea/google-client-secret', allowedDomain: 'stmarobotics.org',
+    googleSecretParameter: '/polysim/google-client-secret', allowedDomain: 'stmarobotics.org',
     adminEmails: [
         'zack.osowski@stmarobotics.org',
         'andy.gasser@stmarobotics.org',

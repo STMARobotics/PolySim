@@ -1,13 +1,13 @@
 # Current production deployment authorization
 
-[GitHub run 44816166948](https://github.com/STMARobotics/PolySim/actions/runs/44816166948) for the latest remote main passed its build/test/synthesis, offline build and OIDC authentication steps, then failed during **Check AWS account and OAuth parameter metadata** with:
+[GitHub run 44816166948](https://github.com/STMARobotics/PolySim/actions/runs/44816166948) passed its build/test/synthesis, offline build and OIDC authentication steps, then failed during **Check AWS account and OAuth parameter metadata** with:
 
 ```text
 AccessDeniedException: ...GitHubAction-AssumeRoleWithAction/GitHubActions
 is not authorized to perform: ssm:DescribeParameters
 ```
 
-CDK deployment and the production smoke test were skipped. The current failure concerns the deployment role's SSM permissions. This workspace has no AWS credentials to inspect or change the existing IAM role. The preflight checks parameter metadata without retrieving the OAuth secret value.
+CDK deployment and the production smoke test were skipped in that run. Newer main commit d6b6e07 replaces the broad DescribeParameters call with GetParameter for the exact `/polysim/google-client-secret` name and WithDecryption=false. It checks SecureString type without decrypting or logging the value. The historical error no longer justifies granting DescribeParameters. This workspace has no AWS credentials to verify the new parameter or deployment role directly.
 
 The workflow uses these existing FMEA roles:
 
@@ -16,17 +16,17 @@ The workflow uses these existing FMEA roles:
 | Push to main: deployment | `arn:aws:iam::738044534240:role/GitHubAction-AssumeRoleWithAction` | `repo:STMARobotics/PolySim:ref:refs/heads/main` |
 | Pull request: read-only diff | `arn:aws:iam::738044534240:role/GitHubAction-PullRequestRole` | `repo:STMARobotics/PolySim:pull_request` |
 
-An AWS administrator should review and add the following metadata-read permission to `GitHubAction-AssumeRoleWithAction`, preserving its existing FMEA policies. A ready-to-review policy is in [deployment-preflight-policy.json](deployment-preflight-policy.json).
+If the new exact-name check lacks permission, an AWS administrator can review the following addition to `GitHubAction-AssumeRoleWithAction`, preserving its existing FMEA policies. A ready-to-review policy is in [deployment-preflight-policy.json](deployment-preflight-policy.json).
 
 ```json
 {
   "Version": "2012-10-17",
   "Statement": [
     {
-      "Sid": "PolySimOAuthParameterMetadata",
+      "Sid": "PolySimOAuthParameterCheck",
       "Effect": "Allow",
-      "Action": "ssm:DescribeParameters",
-      "Resource": "*",
+      "Action": "ssm:GetParameter",
+      "Resource": "arn:aws:ssm:us-east-2:738044534240:parameter/polysim/google-client-secret",
       "Condition": {
         "StringEquals": { "aws:RequestedRegion": "us-east-2" }
       }
@@ -35,7 +35,7 @@ An AWS administrator should review and add the following metadata-read permissio
 }
 ```
 
-DescribeParameters does not support a parameter-specific resource ARN; the region condition limits this metadata-list permission to us-east-2. It does not grant GetParameter, decryption or parameter writes. The preflight itself filters the exact `/fmea/google-client-secret` name and checks that it is a SecureString. Do not replace the deployment role's existing policies with this small addition.
+This policy permits retrieval of only the PolySim parameter in us-east-2. It adds no KMS decryption or parameter-write permission. GetParameter with WithDecryption=false returns the encrypted value, which the preflight does not log. Do not replace the deployment role's existing policies with this small addition. The auth Lambda separately needs GetParameter and KMS access to use the secret during login.
 
 An earlier [run 44814632054](https://github.com/STMARobotics/PolySim/actions/runs/44814632054) failed at OIDC role assumption. The newer run passed that step, so additional trust-policy changes are not indicated by the latest evidence. The table above records the default GitHub subjects for future reference; customized subject templates can differ.
 
