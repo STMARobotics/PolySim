@@ -95,7 +95,7 @@ export interface Issue {
     message: string;
 }
 export const DT = 1 / 120;
-export const ENGINE_VERSION = '0.11.0';
+export const ENGINE_VERSION = '0.12.0';
 export const id = () => crypto.randomUUID();
 export const clone = <T>(value: T): T => structuredClone(value);
 export const ticksFor = (seconds: number) => Math.max(1, Math.ceil(seconds / DT - 1e-9));

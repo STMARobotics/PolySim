@@ -43,6 +43,12 @@ test('Google callback rejects domain lookalikes, unverified mail, missing hd and
         assert.equal([...s.f.store.rows.values()].filter(r=>r.sk==='SESSION').length,0);
     }
 });
+test('verified admin email grants admin role and is re-derived from the stored email',async()=>{
+    const s=await start();s.f.setClaims({email:'ADMIN@STMAROBOTICS.ORG'});const r=await s.callback();
+    assert.equal(r.statusCode,302);const sessionCookie=r.cookies![0].split(';')[0];
+    const info=await s.f.app.handle({...request('/api/auth/session'),cookies:[sessionCookie]});
+    assert.equal(JSON.parse(info.body).user.role,'admin');
+});
 test('all data endpoints reject missing sessions; forged and expired cookies fail regardless of DynamoDB TTL cleanup',async()=>{
     const f=fixture();
     for(const path of ['/api/auth/session','/api/seasons','/api/robots','/api/robots/00000000-0000-4000-8000-000000000000'])assert.equal((await f.app.handle(request(path))).statusCode,401);
@@ -61,9 +67,10 @@ test('logout revokes a session immediately, and responses never cache identities
     const out=await f.app.handle(request('/api/auth/logout','POST',{},session));assert.equal(out.statusCode,204);assert.match(out.cookies![0],/Max-Age=0/);
     assert.equal((await f.app.handle(request('/api/auth/session','GET',undefined,session))).statusCode,401);
 });
-test('configuration refuses non-HTTPS production origins, other domains, missing config and non-loopback local origins',()=>{
-    const valid={APP_ORIGIN:config.origin,ALLOWED_DOMAIN:config.allowedDomain,GOOGLE_CLIENT_ID:'id',GOOGLE_SECRET_PARAMETER:'/x',DATA_TABLE:'x',SESSIONS_TABLE:'y'};
+test('configuration validates origins and normalizes approved-domain admin emails',()=>{
+    const valid={APP_ORIGIN:config.origin,ALLOWED_DOMAIN:config.allowedDomain,GOOGLE_CLIENT_ID:'id',GOOGLE_SECRET_PARAMETER:'/x',DATA_TABLE:'x',SESSIONS_TABLE:'y',ADMIN_EMAILS:' ADMIN@STMAROBOTICS.ORG,admin@stmarobotics.org '};
     assert.equal(configuration(valid).secureCookies,true);
-    for(const patch of [{APP_ORIGIN:'http://example.test'},{APP_ORIGIN:config.origin+'/'},{ALLOWED_DOMAIN:'evil.org'},{GOOGLE_CLIENT_ID:''},{APP_ENV:'local',APP_ORIGIN:'http://example.test'}])assert.throws(()=>configuration({...valid,...patch}));
+    assert.deepEqual(configuration(valid).adminEmails,['admin@stmarobotics.org']);
+    for(const patch of [{APP_ORIGIN:'http://example.test'},{APP_ORIGIN:config.origin+'/'},{ALLOWED_DOMAIN:'evil.org'},{GOOGLE_CLIENT_ID:''},{APP_ENV:'local',APP_ORIGIN:'http://example.test'},{ADMIN_EMAILS:'admin@example.com'}])assert.throws(()=>configuration({...valid,...patch}));
     assert.equal(configuration({...valid,APP_ENV:'local',APP_ORIGIN:'http://127.0.0.1:5173'}).secureCookies,false);
 });

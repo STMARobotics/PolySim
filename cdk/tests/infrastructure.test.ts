@@ -13,7 +13,7 @@ const frontend=new FrontendStack(app,'test-frontend',{env,crossRegionReferences:
 const b=Template.fromStack(backend),f=Template.fromStack(frontend),e=Template.fromStack(edge);
 test('deployment coordinates and Google configuration match FMEA while resources are isolated to PolySim',()=>{
     assert.equal(backend.account,'738044534240');assert.equal(backend.region,'us-east-2');assert.equal(edge.region,'us-east-1');
-    b.hasResourceProperties('AWS::Lambda::Function',{Runtime:'nodejs24.x',Architectures:['arm64'],Environment:{Variables:Match.objectLike({APP_ORIGIN:'https://polysim.7028robotics.com',ALLOWED_DOMAIN:'stmarobotics.org',GOOGLE_SECRET_PARAMETER:'/fmea/google-client-secret'})}});
+    b.hasResourceProperties('AWS::Lambda::Function',{Runtime:'nodejs24.x',Architectures:['arm64'],Environment:{Variables:Match.objectLike({APP_ORIGIN:'https://polysim.7028robotics.com',ALLOWED_DOMAIN:'stmarobotics.org',GOOGLE_SECRET_PARAMETER:'/fmea/google-client-secret',ADMIN_EMAILS:'zack.osowski@stmarobotics.org,andy.gasser@stmarobotics.org'})}});
     e.hasResourceProperties('AWS::CertificateManager::Certificate',{DomainName:'polysim.7028robotics.com',ValidationMethod:'DNS'});
 });
 test('both DynamoDB tables have retention, encryption, PITR and deletion protection; data has a paginated index and backups',()=>{
@@ -56,4 +56,14 @@ test('production entry is the login gate and lazy-loads the editor only after au
     assert.ok(frontend.dependencies.includes(backend),'Backend capabilities deploy before their frontend');
     for(const dir of ['auth','robots','seasons']) {const lambda=readFileSync(`service-dist/${dir}/index.js`,'utf8');assert.ok(!lambda.includes('class MemoryStore'));assert.ok(!lambda.includes('test-code'));}
     assert.ok(readFileSync('service-dist/seasons/index.js','utf8').includes(ENGINE_VERSION),'Production manifest identifies the current engine');
+});
+test('one deployment workflow uses FMEA-style gates and no variables, secrets or pinned actions',()=>{
+    const workflow=readFileSync('.github/workflows/deploy.yml','utf8');
+    assert.match(workflow,/github\.event_name == 'pull_request'/);
+    assert.match(workflow,/github\.ref != 'refs\/heads\/main'/);
+    assert.match(workflow,/github\.ref == 'refs\/heads\/main'/);
+    assert.match(workflow,/GitHubAction-PullRequestRole/);assert.match(workflow,/GitHubAction-AssumeRoleWithAction/);
+    assert.match(workflow,/actions\/checkout@v7/);assert.match(workflow,/actions\/setup-node@v7/);assert.match(workflow,/configure-aws-credentials@v6/);
+    assert.doesNotMatch(workflow,/\$\{\{\s*(vars|secrets)\./);assert.doesNotMatch(workflow,/uses: [^@\n]+@[0-9a-f]{40}/);
+    assert.doesNotMatch(workflow,/workflow_dispatch/);
 });

@@ -38,7 +38,7 @@ export class BackendStack extends cdk.Stack {
     readonly httpApi: api.HttpApi;
     readonly alarms: sns.Topic;
     readonly functions: lambda.Function[]=[];
-    constructor(scope: Construct,id: string,props:cdk.StackProps & {adminSubjects?: string[]}) {
+    constructor(scope: Construct,id: string,props:cdk.StackProps) {
         super(scope,id,props);
         const table=(name: string,ttl=false)=>new ddb.Table(this,name,{
             partitionKey:{name:'pk',type:ddb.AttributeType.STRING},sortKey:{name:'sk',type:ddb.AttributeType.STRING},
@@ -61,7 +61,7 @@ export class BackendStack extends cdk.Stack {
             const fn=new lambda.Function(this,name+'Function',{
                 runtime:lambda.Runtime.NODEJS_24_X,architecture:lambda.Architecture.ARM_64,handler:'index.handler',code:lambda.Code.fromAsset(resolve('service-dist',name)),
                 memorySize:512,timeout:cdk.Duration.seconds(15),reservedConcurrentExecutions:name==='auth'?10:20,logGroup:group,
-                environment:{APP_ENV:'production',APP_ORIGIN:'https://'+config.hostname,ALLOWED_DOMAIN:config.allowedDomain,GOOGLE_CLIENT_ID:config.googleClientId,GOOGLE_SECRET_PARAMETER:config.googleSecretParameter,DATA_TABLE:data.tableName,SESSIONS_TABLE:sessions.tableName,ADMIN_GOOGLE_SUBJECTS:(props.adminSubjects ?? []).join(',')},
+                environment:{APP_ENV:'production',APP_ORIGIN:'https://'+config.hostname,ALLOWED_DOMAIN:config.allowedDomain,GOOGLE_CLIENT_ID:config.googleClientId,GOOGLE_SECRET_PARAMETER:config.googleSecretParameter,DATA_TABLE:data.tableName,SESSIONS_TABLE:sessions.tableName,ADMIN_EMAILS:config.adminEmails.join(',')},
             });
             fn.addToRolePolicy(new iam.PolicyStatement({actions:['dynamodb:GetItem'],resources:[sessions.tableArn]}));
             alarm(name+'Errors',fn.metricErrors({period:cdk.Duration.minutes(5)}));

@@ -55,7 +55,7 @@ export class Auth {
         let payload: TokenPayload;
         try {payload=await this.google.exchange(q.code,state.verifier,state.nonce);verifyClaims(payload,state.nonce,this.config,this.now());}
         catch {return failed();}
-        const user: User={sub:payload.sub,email:payload.email!,name:(payload.name ?? payload.email!).slice(0,100),role:this.config.adminSubjects.includes(payload.sub)?'admin':'member'};
+        const user: User={sub:payload.sub,email:payload.email!,name:(payload.name ?? payload.email!).slice(0,100),role:this.config.adminEmails.includes(payload.email!.toLowerCase())?'admin':'member'};
         const session=random(), ttl=this.now()+this.config.sessionSeconds;
         await this.store.put(this.config.sessionsTable,{pk:'SESSION#'+hash(session),sk:'SESSION',user,ttl});
         const prior=cookie(req,this.sessionCookie);
@@ -67,7 +67,7 @@ export class Auth {
         const row=tokenShape(raw)?await this.store.get(this.config.sessionsTable,'SESSION#'+hash(raw),'SESSION'):undefined;
         if(!row || !Number.isSafeInteger(row.ttl) || row.ttl<=this.now() || typeof row.user?.sub!=='string' || !row.user.sub || typeof row.user?.email!=='string' || row.user.email.split('@')[1]?.toLowerCase()!==this.config.allowedDomain)throw new HttpError(401,'UNAUTHENTICATED','Sign in to continue.');
         // Roles are derived on every request so config changes revoke privileges immediately.
-        return {user:{...row.user,role:this.config.adminSubjects.includes(row.user.sub)?'admin':'member'},ttl:row.ttl};
+        return {user:{...row.user,role:this.config.adminEmails.includes(row.user.email.toLowerCase())?'admin':'member'},ttl:row.ttl};
     }
     async mutation(req: Request): Promise<Session> {
         sameOrigin(req,this.config.origin);

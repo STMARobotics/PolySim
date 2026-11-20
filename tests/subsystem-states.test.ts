@@ -47,10 +47,10 @@ test('timed state changes ease geometry at 120 Hz, honor key release, update col
         for(let i=0;i<30;i++)sim.step(input());
         const quarter=sim.snapshot().subsystems![2];assert.ok(Math.abs(quarter.size[2]-(from.size[2]+(to.size[2]-from.size[2])*easeState(.25)))<1e-9);
         assert.ok(quarter.transition);assert.equal(quarter.solid,true);
-        assert.ok(Math.abs(sim.robot.collider(3).halfExtents().z-quarter.size[2]/2)<1e-6);
+        const quarterShape=sim.robot.collider(3).halfExtents();assert.ok(quarterShape);assert.ok(Math.abs(quarterShape.z-quarter.size[2]/2)<1e-6);
         for(let i=0;i<90;i++)sim.step(input());
         const final=sim.snapshot().subsystems![2];assert.equal(final.stateId,to.id);assert.equal(final.transition,undefined);assert.deepEqual(final.size,to.size);assert.equal(final.roll,to.roll);
-        assert.ok(Math.abs(sim.robot.collider(3).halfExtents().z-.5)<1e-6);
+        const finalShape=sim.robot.collider(3).halfExtents();assert.ok(finalShape);assert.ok(Math.abs(finalShape.z-.5)<1e-6);
         const fresh=new Simulation(d);try {assert.deepEqual(fresh.snapshot().subsystems![2].size,from.size);}finally{fresh.free();}
         assert.deepEqual(d.subsystems[2].size,from.size,'runtime must not mutate the design used for restart');
     }finally{sim.free();}
