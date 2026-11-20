@@ -68,6 +68,7 @@ test('Edit mouse inputs orbit on right drag, pan on middle/Ctrl-right, reserve l
         style = { touchAction: '' };
         clientWidth = 1000;
         clientHeight = 600;
+        ownerDocument = this;
         getRootNode() { return this; }
         setPointerCapture() {}
         releasePointerCapture() {}
