@@ -5,7 +5,7 @@ export const production = {
     certificateStackName: 'polysim-certificate',
     domainName: '7028robotics.com', hostname: 'polysim.7028robotics.com',
     hostedZoneId: 'Z014656337LGZWAE9JKJP',
-    googleClientId: '574028865613-kh9gccmi9ccfqsv7s89rdttf7cc1ohj4.apps.googleusercontent.com',
+    googleClientId: '574028865613-u39c674ft1f8fcmd7kv13ocm378enc61.apps.googleusercontent.com',
     googleSecretParameter: '/polysim/google-client-secret', allowedDomain: 'stmarobotics.org',
     adminEmails: [
         'zack.osowski@stmarobotics.org',
