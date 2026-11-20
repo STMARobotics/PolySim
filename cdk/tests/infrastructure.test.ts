@@ -5,6 +5,7 @@ import {Template,Match} from 'aws-cdk-lib/assertions';
 import {BackendStack,CertificateStack,FrontendStack} from '../lib/stacks';
 import {production} from '../lib/config';
 import {readFileSync,readdirSync} from 'node:fs';
+import {ENGINE_VERSION} from '../../contracts/model';
 const app=new App({context:{'@aws-cdk/core:defaultCrossStackReferences':'strong'}}),env={account:production.account,region:production.region};
 const edge=new CertificateStack(app,'test-certificate',{env:{...env,region:'us-east-1'},crossRegionReferences:true});
 const backend=new BackendStack(app,'test-backend',{env,crossRegionReferences:true});
@@ -12,7 +13,7 @@ const frontend=new FrontendStack(app,'test-frontend',{env,crossRegionReferences:
 const b=Template.fromStack(backend),f=Template.fromStack(frontend),e=Template.fromStack(edge);
 test('deployment coordinates and Google configuration while resources are isolated to PolySim',()=>{
     assert.equal(backend.account,'738044534240');assert.equal(backend.region,'us-east-2');assert.equal(edge.region,'us-east-1');
-    b.hasResourceProperties('AWS::Lambda::Function',{Runtime:'nodejs24.x',Architectures:['arm64'],Environment:{Variables:Match.objectLike({APP_ORIGIN:'https://polysim.7028robotics.com',ALLOWED_DOMAIN:'stmarobotics.org',GOOGLE_SECRET_PARAMETER:'/polysim/google-client-secret',ADMIN_EMAILS:'zack.osowski@stmarobotics.org,andy.gasser@stmarobotics.org'})}});
+    b.hasResourceProperties('AWS::Lambda::Function',{Runtime:'nodejs24.x',Architectures:['arm64'],Environment:{Variables:Match.objectLike({APP_ORIGIN:'https://polysim.7028robotics.com',ALLOWED_DOMAIN:'stmarobotics.org',GOOGLE_SECRET_PARAMETER:production.googleSecretParameter,ADMIN_EMAILS:'zack.osowski@stmarobotics.org,andy.gasser@stmarobotics.org'})}});
     e.hasResourceProperties('AWS::CertificateManager::Certificate',{DomainName:'polysim.7028robotics.com',ValidationMethod:'DNS'});
 });
 test('both DynamoDB tables have retention, encryption, PITR and deletion protection; data has a paginated index and backups',()=>{
@@ -26,7 +27,7 @@ test('Lambda permissions contain no scans and give only the auth role access to 
     const grants=Object.entries(policies).flatMap(([id,r])=>r.Properties.PolicyDocument.Statement.map((statement:any)=>({id,statement})));
     assert.ok(!grants.some(({statement})=>JSON.stringify(statement.Action).includes('dynamodb:Scan')));
     const secret=grants.filter(({statement})=>JSON.stringify(statement.Action).includes('ssm:GetParameter'));
-    assert.equal(secret.length,1);assert.match(secret[0].id,/authFunction/);assert.match(JSON.stringify(secret[0].statement.Resource),/parameter\/polysim\/google-client-secret/);
+    assert.equal(secret.length,1);assert.match(secret[0].id,/authFunction/);assert.ok(JSON.stringify(secret[0].statement.Resource).includes('parameter'+production.googleSecretParameter));
     const decrypt=grants.filter(({statement})=>JSON.stringify(statement.Action).includes('kms:Decrypt'));
     assert.equal(decrypt.length,1);assert.ok(decrypt[0].statement.Condition.StringEquals['kms:EncryptionContext:PARAMETER_ARN']);
 });
@@ -50,7 +51,11 @@ test('production entry is the login gate and lazy-loads the editor only after au
     const html=readFileSync('dist/index.html','utf8'), entry=html.match(/src="([^\"]+\.js)"/)![1];
     const code=readFileSync('dist'+entry,'utf8');assert.ok(code.includes('/api/auth/session'));assert.ok(code.includes('Sign in with Google'));assert.ok(code.includes('stmarobotics.org accounts only'));
     assert.ok(!code.includes('new WebGLRenderer'));assert.ok(readdirSync('dist/assets').some(f=>f.startsWith('main-')));
+    const worker=readdirSync('dist/assets').find(file=>/^worker-.*\.js$/.test(file));assert.ok(worker,'Production worker is published with the authenticated app');
+    const physics=readFileSync(`dist/assets/${worker}`,'utf8');assert.ok(physics.includes('setCollisionGroups'));
+    assert.ok(frontend.dependencies.includes(backend),'Backend capabilities deploy before their frontend');
     for(const dir of ['auth','robots','seasons']) {const lambda=readFileSync(`service-dist/${dir}/index.js`,'utf8');assert.ok(!lambda.includes('class MemoryStore'));assert.ok(!lambda.includes('test-code'));}
+    assert.ok(readFileSync('service-dist/seasons/index.js','utf8').includes(ENGINE_VERSION),'Production manifest identifies the current engine');
 });
 test('one deployment workflow uses FMEA-style gates and no variables, secrets or pinned actions',()=>{
     const workflow=readFileSync('.github/workflows/deploy.yml','utf8');

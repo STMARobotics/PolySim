@@ -1,4 +1,11 @@
+import {ensureStates,syncDefaults} from './states';
 import { normalizeBinding } from './bindings';
+import {TRIGGERS, type Trigger} from './triggers';
+export type {Trigger} from './triggers';
+import {TARGETING_MODES,type TargetingMode} from './targeting';
+import type {FieldConfiguration} from './field';
+import {seasonFor,pieceTypesFor,acceptedTypes} from '../seasons/registry';
+import {validateField,ensureField} from './field-validation';
 export type Vec3 = [
     number,
     number,
@@ -6,7 +13,12 @@ export type Vec3 = [
 ];
 export type Face = '+X' | '-X' | '+Y' | '-Y' | '+Z' | '-Z';
 export const FACES: Face[] = ['+X', '-X', '+Y', '-Y', '+Z', '-Z'];
-export type Trigger = 'hold' | 'press';
+export interface SubsystemState {
+    id: string; name: string; isDefault: boolean;
+    position: Vec3; size: Vec3; yaw: number; pitch: number; roll: number;
+    capacity: number; ignoreCollision: boolean;
+}
+export interface StateTransition {id: string; source: string; target: string; key: string; trigger: Trigger; duration: number}
 export interface Subsystem {
     id: string;
     name: string;
@@ -15,11 +27,20 @@ export interface Subsystem {
     yaw: number;
     capacity: number;
     solid: boolean;
+    pitch?: number;
+    roll?: number;
+    targetingMode?: TargetingMode;
+    targetingFreedom?: number;
+    states?: SubsystemState[];
+    stateTransitions?: StateTransition[];
+    stateLayout?: Record<string, [number,number]>;
 }
 export interface Surface {
+    accepts?: string[];
     id: string;
     name: string;
     owner: string;
+    stateId?: string;
     faces: Face[];
     type: 'intake' | 'outtake';
     interval: number;
@@ -31,6 +52,7 @@ export interface Surface {
     unitsY?: number;
 }
 export interface Edge {
+    pieceType?: string;
     id: string;
     source: string;
     target: string;
@@ -41,6 +63,7 @@ export interface Edge {
     concurrency: number;
 }
 export interface RobotDocument {
+    field?: FieldConfiguration;
     schemaVersion: 1;
     id: string;
     name: string;
@@ -72,7 +95,7 @@ export interface Issue {
     message: string;
 }
 export const DT = 1 / 120;
-export const ENGINE_VERSION = '0.5.0';
+export const ENGINE_VERSION = '0.12.0';
 export const id = () => crypto.randomUUID();
 export const clone = <T>(value: T): T => structuredClone(value);
 export const ticksFor = (seconds: number) => Math.max(1, Math.ceil(seconds / DT - 1e-9));
@@ -89,15 +112,17 @@ export function syncSurfaceLinks(d: RobotDocument): RobotDocument {
     const used = new Set([d.id, ...d.subsystems.map(s => s.id), ...surfaceIds, ...original.map(e => e.id)]);
     d.edges = original.filter(e => !surfaceIds.has(e.source) && !surfaceIds.has(e.target));
     for (const s of d.surfaces) {
+      for(const pieceType of acceptedTypes(d,s)) {
         const source = s.type === 'intake' ? s.id : s.owner, target = s.type === 'intake' ? s.owner : s.id;
-        const existing = original.find(e => e.source === source && e.target === target);
-        let linkId = existing?.id ?? `action:${s.id}`;
+        const existing = original.find(e => e.source === source && e.target === target && (e.pieceType ?? pieceTypesFor(d)[0].id)===pieceType);
+        let linkId = existing?.id ?? `action:${s.id}:${pieceType}`;
         if (!existing) { while (used.has(linkId)) linkId += ':'; }
         used.add(linkId);
         const legacy = s as Surface & {key?: string; trigger?: Trigger};
-        d.edges.push({id: linkId, source, target, duration: existing?.duration ?? 0, key: existing?.key ?? legacy.key ?? (s.type === 'intake' ? 'i' : 'k'), trigger: existing?.trigger ?? legacy.trigger ?? 'hold', priority: existing?.priority ?? 0, concurrency: 100});
-        delete legacy.key;
-        delete legacy.trigger;
+        d.edges.push({id: linkId, source, target, pieceType,duration: existing?.duration ?? 0, key: existing?.key ?? legacy.key ?? (s.type === 'intake' ? 'i' : 'k'), trigger: existing?.trigger ?? legacy.trigger ?? 'hold', priority: existing?.priority ?? 0, concurrency: 100});
+      }
+        delete (s as Surface & {key?:string}).key;
+        delete (s as Surface & {trigger?:Trigger}).trigger;
     }
     const links = d.edges.filter(e => surfaceForEdge(d, e)), byId = new Map(links.map(e => [e.id, e]));
     const ordered = original.filter(e => (!surfaceIds.has(e.source) && !surfaceIds.has(e.target)) || byId.has(e.id)).map(e => byId.get(e.id) ?? e);
@@ -123,8 +148,8 @@ export function validate(d: RobotDocument): Issue[] {
     };
     if (!d.name.trim() || d.name.length > 100)
         error(d.id, 'Robot name must contain 1–100 characters.');
-    if (d.seasonId !== 'practice-balls')
-        error(d.id, 'Unsupported season. Only Practice Lab is implemented.');
+    try {seasonFor(d.seasonId);}catch {error(d.id,'Unsupported season.');return issues;}
+    for(const message of validateField(d))error(d.id,message);
     if (d.subsystems.length > 50 || d.surfaces.length > 100 || d.edges.length > 200)
         error(d.id, 'Document exceeds the offline model size limit.');
     for (const [name, n] of Object.entries(d.basics))
@@ -141,6 +166,8 @@ export function validate(d: RobotDocument): Issue[] {
     }
     const assigned = new Set<string>();
     for (const s of d.subsystems) {
+        if (s.targetingMode!==undefined && !TARGETING_MODES.includes(s.targetingMode)) error(s.id,'Unknown targeting mode.');
+        if (s.targetingFreedom!==undefined && (!Number.isFinite(s.targetingFreedom) || s.targetingFreedom<0 || s.targetingFreedom>2*Math.PI)) error(s.id,'Degrees of freedom must be from 0 to 360 degrees.');
         s.size.forEach(n => positive(s.id, 'Dimension', n, 3));
         if (!s.position.every(n => Number.isFinite(n) && Math.abs(n) <= 5) || !Number.isFinite(s.yaw))
             error(s.id, 'Position or rotation is invalid.');
@@ -149,13 +176,33 @@ export function validate(d: RobotDocument): Issue[] {
         if (!d.edges.some(e => e.source === s.id))
             issues.push({ level: 'warning', object: s.id, message: `${s.name} has no outgoing route.` });
     }
+    for (const sub of d.subsystems) {
+        if (!sub.states) continue;
+        if (!sub.states.length || sub.states.length>20 || sub.states.filter(s=>s.isDefault).length!==1) error(sub.id,'Exactly one default state is required per subsystem (maximum 20 states).');
+        for (const state of sub.states) {
+            if (used.has(state.id) || !state.id || !state.name.trim() || state.name.length>100) error(sub.id,'State IDs and names must be valid and unique.');
+            used.add(state.id);
+            if (![...state.position,...state.size,state.yaw,state.pitch,state.roll].every(Number.isFinite) || state.position.some(n=>Math.abs(n)>5) || state.size.some(n=>n<=0||n>3) || !Number.isInteger(state.capacity) || state.capacity<1 || state.capacity>100) error(state.id,'State geometry or capacity is invalid.');
+        }
+        if ((sub.stateTransitions?.length ?? 0)>100) error(sub.id,'At most 100 state transitions are allowed per subsystem.');
+        const bindings=new Set<string>();
+        for (const edge of sub.stateTransitions ?? []) {
+            const binding=edge.source+':'+normalizeBinding(edge.key);
+            if(bindings.has(binding))error(edge.id,'Choose different keys for transitions leaving the same state.');
+            bindings.add(binding);
+            if (used.has(edge.id) || !edge.id || edge.source===edge.target || !sub.states.some(s=>s.id===edge.source) || !sub.states.some(s=>s.id===edge.target) || !Number.isFinite(edge.duration) || edge.duration<0 || edge.duration>60 || !normalizeBinding(edge.key) || !TRIGGERS.includes(edge.trigger)) error(edge.id,'Invalid state transition.');
+            used.add(edge.id);
+        }
+    }
     for (const s of d.surfaces) {
+        if(!acceptedTypes(d,s).length || new Set(acceptedTypes(d,s)).size!==acceptedTypes(d,s).length || acceptedTypes(d,s).some(t=>!pieceTypesFor(d).some(p=>p.id===t)))error(s.id,'Choose valid game piece types for this season.');
         if (!d.subsystems.some(b => b.id === s.owner))
             error(s.id, 'Surface owner is missing.');
+        if (s.stateId && !d.subsystems.find(b=>b.id===s.owner)?.states?.some(t=>t.id===s.stateId)) error(s.id,'Action state is missing.');
         if (!s.faces.length)
             error(s.id, 'Assign at least one face.');
         for (const face of s.faces) {
-            const key = `${s.owner}:${face}`;
+            const key = `${s.owner}:${s.stateId ?? "legacy"}:${face}`;
             if (!FACES.includes(face) || assigned.has(key))
                 error(s.id, 'A face must be valid and assigned only once.');
             assigned.add(key);
@@ -174,6 +221,8 @@ export function validate(d: RobotDocument): Issue[] {
             error(s.id, `${s.name} needs a graph route.`);
     }
     for (const e of d.edges) {
+        const type=e.pieceType ?? pieceTypesFor(d)[0].id;
+        if(!pieceTypesFor(d).some(p=>p.id===type) || (surfaceForEdge(d,e) && !acceptedTypes(d,surfaceForEdge(d,e)!).includes(type)))error(e.id,'Transition game piece type is incompatible.');
         if (!validConnection(d, e.source, e.target))
             error(e.id, 'Unsupported or missing graph connection.');
         const action = surfaceForEdge(d, e);
@@ -183,12 +232,12 @@ export function validate(d: RobotDocument): Issue[] {
         } else positive(e.id, 'Transfer time', e.duration, 60);
         if (!normalizeBinding(e.key))
             error(e.id, 'Choose a keyboard key.');
-        if (!['hold', 'press'].includes(e.trigger))
+        if (!TRIGGERS.includes(e.trigger))
             error(e.id, 'Unknown trigger mode.');
         if (!action && (!Number.isFinite(e.priority) || !Number.isInteger(e.concurrency) || e.concurrency < 1 || e.concurrency > 20))
             error(e.id, 'Invalid priority or concurrency.');
     }
-    issues.push({ level: 'warning', object: d.id, message: 'Practice fixture · estimated drive and ball coefficients · no official FRC rules, drag, traction, tipping, or articulation.' });
+    issues.push({ level: 'warning', object: d.id, message: 'Season fixture · block geometry and estimated piece coefficients · no official match rules, drag, traction, tipping, or flexible game pieces.' });
     return issues;
 }
 // Treat imported JSON as untrusted data before giving it to the typed editor or worker.
@@ -207,6 +256,16 @@ export function parseDocument(raw: unknown): RobotDocument {
     for (const s of x.subsystems)
         if (!s || typeof s.id !== 'string' || typeof s.name !== 'string' || !vector(s.position) || !vector(s.size) || typeof s.yaw !== 'number' || typeof s.capacity !== 'number' || typeof s.solid !== 'boolean')
             throw Error('Malformed subsystem.');
+    for (const sub of x.subsystems) {
+        if ((sub.targetingMode!==undefined && !TARGETING_MODES.includes(sub.targetingMode)) || (sub.targetingFreedom!==undefined && (!Number.isFinite(sub.targetingFreedom) || sub.targetingFreedom<0 || sub.targetingFreedom>2*Math.PI))) throw Error('Malformed subsystem targeting settings.');
+        if (sub.states !== undefined) {
+            if (!Array.isArray(sub.states) || !sub.states.length || sub.states.length>20 || sub.states.filter(s=>s?.isDefault===true).length!==1) throw Error('Exactly one default state is required per subsystem.');
+            for (const state of sub.states) if (!state || typeof state.id!=='string' || typeof state.name!=='string' || typeof state.isDefault!=='boolean' || typeof state.ignoreCollision!=='boolean' || !vector(state.position) || !vector(state.size) || !['yaw','pitch','roll','capacity'].every(k=>typeof (state as any)[k]==='number')) throw Error('Malformed subsystem state.');
+        }
+        if (sub.stateTransitions!==undefined && (!Array.isArray(sub.stateTransitions) || sub.stateTransitions.length>100 || sub.stateTransitions.some(e=>!e || !['id','source','target','key','trigger'].every(k=>typeof (e as any)[k]==='string') || typeof e.duration!=='number'))) throw Error('Malformed state transitions.');
+        for(const position of Object.values(sub.stateLayout ?? {})) if (!Array.isArray(position) || position.length!==2 || !position.every(n=>Number.isFinite(n)&&Math.abs(n)<10000)) throw Error('Malformed state graph layout.');
+        if (![sub.pitch ?? 0,sub.roll ?? 0].every(Number.isFinite)) throw Error('Malformed rotation.');
+    }
     for (const s of x.surfaces)
         if (!s || typeof s.id !== 'string' || typeof s.name !== 'string' || typeof s.owner !== 'string' || !['intake', 'outtake'].includes(s.type) || !Array.isArray(s.faces) || !s.faces.every(f => typeof f === 'string') || !vector(s.spin) || !['interval', 'speed', 'yaw', 'pitch'].every(k => typeof (s as any)[k] === 'number'))
             throw Error('Malformed action surface.');
@@ -221,5 +280,8 @@ export function parseDocument(raw: unknown): RobotDocument {
             throw Error('Malformed graph layout.');
     if (JSON.stringify(x).length > 250 * 1024)
         throw Error('Document exceeds 250 KiB.');
-    return syncSurfaceLinks(clone(x));
+    seasonFor(x.seasonId);
+    if(validateField(x).length)throw Error(validateField(x)[0]);
+    for(const surface of x.surfaces)if(surface.accepts!==undefined && (!Array.isArray(surface.accepts)||surface.accepts.some(t=>typeof t!=='string')))throw Error('Malformed action game piece types.');
+    return syncSurfaceLinks(syncDefaults(ensureField(clone(x))));
 }

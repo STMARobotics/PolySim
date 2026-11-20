@@ -1,13 +1,18 @@
+import {snapPosition,snapMetres} from '../contracts/inch-grid';
+import {nearestActionFace,type FaceTarget} from './face-target';
+import {outputTrajectories} from './trajectory';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import { inventoryFraction, resizedDimensions } from './editor-model';
 import { stationCameraPosition, trackingFactor, configureEditOrbit, type DriverStation } from './camera-model';
 import { FACES, type RobotDocument, type Face, type Vec3 } from '../contracts/model';
-import { practice } from '../seasons/practice';
+import {seasonFor} from '../seasons/registry';
+import {scoringPlanes} from '../simulation/field';
 import type { Snapshot } from '../simulation/protocol';
 import { RenderProfile } from './render-profile';
-import { RenderFrames, blendYaw } from './render-frames';
+import { RenderFrames, blendYaw, blendSubsystemYaw } from './render-frames';
+import {pieceGeometry} from './piece-geometry';
 const colors = { intake: 0x398dff, outtake: 0xf44854, white: 0xe7edf0 };
 export class Viewport {
     scene = new THREE.Scene();
@@ -22,16 +27,28 @@ export class Viewport {
     private pointer = new THREE.Vector2();
     private meshes = new Map<string, THREE.Mesh>();
     private frames = new RenderFrames();
-    private pieceMesh = new THREE.InstancedMesh(new THREE.SphereGeometry(practice.radius, 12, 8), new THREE.MeshStandardMaterial({color: 0xf5b14e, roughness: .7}), Math.max(32, practice.pieces.length));
+    private pieceMeshes=new Map<string,THREE.InstancedMesh>();
+    private fieldVisual=new THREE.Group();
+    private scoringVisual=new THREE.Group();
+    private fieldMeshes=new Map<string,THREE.Mesh>();
+    private fieldFills=new Map<string,THREE.Mesh>();
+    private fieldEditing=false;
+    private scopeCamera?:{position:THREE.Vector3;target:THREE.Vector3};
+    private fieldSeason='';
     private instanceTransform = new THREE.Object3D();
     private fromRotation = new THREE.Quaternion();
     private toRotation = new THREE.Quaternion();
     private aim = new THREE.Vector3();
     private robotAimHeight = .5;
     private selection?: THREE.LineSegments;
-    private arc?: THREE.Line;
+    private arcs = new Map<string,THREE.LineSegments>();
+    private arcKey='';
+    private frameGeometry?:Snapshot['subsystems'];
     private document?: RobotDocument;
     private selected = '';
+    private actionHighlight?:THREE.Mesh;
+    private actionHighlightKey='';
+    private assigningAction=false;
     private resizeObserver: ResizeObserver;
     private drawStart?: THREE.Vector3;
     private ghost?: THREE.Mesh;
@@ -87,23 +104,30 @@ export class Viewport {
         this.transform.setSpace('local');
         this.transform.setSize(.85);
         this.transform.setColors(0xf34855,0xffd135,0x368cff,0xffffff);
-        this.transform.setTranslationSnap(.01);
-        this.transform.setScaleSnap(.01);
+        this.transform.setTranslationSnap(.0127);
+        this.transform.setScaleSnap(null);
         this.scene.add(this.transform.getHelper());
         this.transform.addEventListener('dragging-changed', event => { this.controls.enabled = !event.value && !this.drawing && !this.driver; });
         this.transform.addEventListener('mouseDown', () => {
             this.transformGesture = true;
-            const block = this.document?.subsystems.find(s => s.id === this.transform.object?.userData.id);
+            const block = this.document?.subsystems.find(s => s.id === this.transform.object?.userData.id) ?? this.document?.field?.scoringElements.find(s=>s.id===this.transform.object?.userData.id) ?? this.document?.field?.sources.map(s=>({...s,size:[.12,.12,.12] as Vec3})).find(s=>s.id===this.transform.object?.userData.id);
             if (block)
                 this.transformStart = { position: [...block.position], size: [...block.size] };
+        });
+        this.transform.addEventListener('objectChange',()=>{
+            const object=this.transform.object,start=this.transformStart;if(!object||!start)return;
+            if(this.transform.getMode()==='scale') {
+                const size=resizedDimensions(start.size,object.scale.toArray() as Vec3,object.userData.field?12:3);
+                object.scale.set(size[0]/start.size[0],size[1]/start.size[1],size[2]/start.size[2]);
+            } else object.position.set(...(object.userData.field ? object.position.toArray().map(v=>snapMetres(v,-50,50)) as Vec3 : snapPosition(object.position.toArray() as Vec3)));
         });
         this.transform.addEventListener('mouseUp', () => {
             const object = this.transform.object, start = this.transformStart;
             this.transformStart = undefined;
             if (!object || !start)
                 return;
-            const position = object.position.toArray().map(n => Math.max(-5, Math.min(5, Math.round(n * 1000) / 1000))) as Vec3;
-            const size = resizedDimensions(start.size, object.scale.toArray() as Vec3);
+            const position = (object.userData.field ? object.position.toArray().map(v=>snapMetres(v,-50,50)) as Vec3 : snapPosition(object.position.toArray() as Vec3));
+            const size = resizedDimensions(start.size,object.scale.toArray() as Vec3,object.userData.field?12:3);
             if (position.some((n, i) => n !== start.position[i]) || size.some((n, i) => n !== start.size[i]))
                 this.onGeometry(object.userData.id, position, size);
         });
@@ -122,10 +146,6 @@ export class Viewport {
         document.fonts.load('40px "Mona Sans"').then(() => { for (const label of this.textLabels)
             this.paintLabel(label); }).catch(() => { });
         this.robot.add(this.blocks);
-        this.pieceMesh.castShadow = true;
-        this.pieceMesh.frustumCulled = false;
-        this.pieceMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-        this.balls.add(this.pieceMesh);
         this.scene.add(this.robot, this.balls);
         this.resizeObserver = new ResizeObserver(() => this.resize());
         this.resizeObserver.observe(host);
@@ -233,34 +253,34 @@ export class Viewport {
         label.texture.needsUpdate = true;
     }
     private makeField() {
-        this.box(0, 0, -.08, 12, 8, .16, 0x203750);
-        const grid = new THREE.GridHelper(12, 24, 0x4b6c92, 0x2b455f);
-        grid.rotation.x = Math.PI / 2;
-        grid.position.z = .006;
-        grid.scale.z = 8 / 12;
-        this.scene.add(grid);
-        this.box(-6.08, 0, .23, .16, 8.3, .46, 0x224b7b);
-        this.box(6.08, 0, .23, .16, 8.3, .46, 0x224b7b);
-        this.box(0, -4.08, .23, 12.3, .16, .46, 0x224b7b);
-        this.box(0, 4.08, .23, 12.3, .16, .46, 0x224b7b);
-        this.box(-4.7, 0, .012, 2.5, 7.8, .012, 0x1d64d3, this.scene, .45);
-        this.box(4.7, 0, .013, 2.5, 7.8, .012, 0xd62d42, this.scene, .35);
-        this.box(0, 0, .015, .035, 8, .015, 0xffdf35);
-        const o = practice.obstacle;
-        this.box(o.x, o.y, o.height / 2, o.length, o.width, o.height, 0xdc3545);
-        const t = practice.target;
-        this.box(t.x, t.y, (t.height - .4) / 2, .16, .16, t.height - .4, 0x91a8b3);
-        this.box(t.x, t.y, t.height - .4, t.depth, t.width, .1, 0x1456c4);
-        this.box(t.x + t.depth / 2, t.y, t.height - .25, .08, t.width, .3, 0x3d8eff, this.scene, .65);
-        this.box(t.x - t.depth / 2, t.y, t.height - .25, .08, t.width, .3, 0x3d8eff, this.scene, .35);
-        for (const s of [-1, 1])
-            this.box(t.x, t.y + s * t.width / 2, t.height - .25, t.depth, .08, .3, 0x3d8eff, this.scene, .65);
-        this.label('Practice lab', 0, 3.7, .7, .3);
-        this.label('Target · 1 pt', 4.75, 0, 2.3, .22, '#95d7e6');
-        this.label('Start', -4.8, 2.8, .3, .25, '#94b9d5');
-        const axes = new THREE.AxesHelper(.65);
-        axes.position.set(-5.6, -3.5, .04);
-        this.scene.add(axes);
+        const season=seasonFor(this.document?.seasonId ?? 'practice-balls');if(this.fieldSeason===season.id)return;this.fieldSeason=season.id;
+        this.disposeGroup(this.fieldVisual);this.scene.add(this.fieldVisual,this.scoringVisual);
+        this.box(0,0,-.08,season.length,season.width,.16,0x203750,this.fieldVisual);
+        const grid=new THREE.GridHelper(season.length,36,0x4b6c92,0x2b455f);grid.rotation.x=Math.PI/2;grid.position.z=.006;grid.scale.z=season.width/season.length;this.fieldVisual.add(grid);
+        for(const g of season.geometry){const mesh=this.box(...g.position,...g.size,g.color,this.fieldVisual);mesh.rotation.set(g.roll ?? 0,g.pitch ?? 0,g.yaw ?? 0,'ZYX');}
+        for(const [id,mesh] of this.pieceMeshes){this.balls.remove(mesh);mesh.geometry.dispose();(mesh.material as THREE.Material).dispose();mesh.dispose();}this.pieceMeshes.clear();
+        for(const type of season.pieceTypes){const mesh=new THREE.InstancedMesh(pieceGeometry(type),new THREE.MeshStandardMaterial({color:type.color,roughness:.7}),256);mesh.castShadow=true;mesh.frustumCulled=false;mesh.count=0;mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);this.pieceMeshes.set(type.id,mesh);this.balls.add(mesh);}
+        this.driverEye.set(...stationCameraPosition(this.station,season.length,season.width));
+    }
+    setFieldEditing(on:boolean){
+        if(on===this.fieldEditing)return;this.fieldEditing=on;
+        if(on){const season=seasonFor(this.document?.seasonId ?? 'practice-balls');this.scopeCamera={position:this.camera.position.clone(),target:this.controls.target.clone()};this.controls.target.set(0,0,.5);this.camera.position.set(-season.length*.65,-season.width*1.1,season.length*.7);this.camera.lookAt(this.controls.target);this.controls.update();}
+        else if(this.scopeCamera){if(!this.driver){this.camera.position.copy(this.scopeCamera.position);this.controls.target.copy(this.scopeCamera.target);this.controls.update();}this.scopeCamera=undefined;}
+    }
+    private renderScoring() {
+        this.disposeGroup(this.scoringVisual);this.fieldMeshes.clear();this.fieldFills.clear();
+        for(const goal of this.document?.field?.scoringElements ?? []) {
+            const group=new THREE.Group();group.position.set(...goal.position);group.rotation.set(goal.roll,goal.pitch,goal.yaw,'ZYX');this.scoringVisual.add(group);
+            const selected=this.fieldEditing&&(goal.id===this.selected||goal.surfaces.some(s=>s.id===this.selected));
+            const mesh=new THREE.Mesh(new THREE.BoxGeometry(...goal.size),new THREE.MeshBasicMaterial({color:selected?0xffd348:0x567ba8,wireframe:true,transparent:true,opacity:selected?1:this.fieldEditing?.65:.18}));group.add(mesh);
+            // Editable box itself owns the world transform; face indicators stay relative to it.
+            group.remove(mesh);this.scoringVisual.remove(group);mesh.position.copy(group.position);mesh.rotation.copy(group.rotation);this.scoringVisual.add(mesh);
+            mesh.userData={id:goal.id,baseSize:[...goal.size],field:true};this.fieldMeshes.set(goal.id,mesh);
+            for(const plane of scoringPlanes(goal)){const face=new THREE.Mesh(new THREE.BoxGeometry(...plane.size),new THREE.MeshBasicMaterial({color:0xffd348,transparent:true,opacity:this.fieldEditing?.28:.12,depthWrite:false}));face.position.set(plane.position[0]-goal.position[0],plane.position[1]-goal.position[1],plane.position[2]-goal.position[2]);face.position.applyQuaternion(mesh.quaternion.clone().invert());mesh.add(face);}
+            const fill=new THREE.Mesh(new THREE.BoxGeometry(...goal.size),new THREE.MeshBasicMaterial({color:0xffd348,transparent:true,opacity:.7}));fill.visible=false;mesh.add(fill);this.fieldFills.set(goal.id,fill);
+            if(this.fieldEditing&&(goal.id===this.selected||goal.surfaces.some(s=>s.id===this.selected)))this.transform.attach(mesh);
+        }
+        if(this.fieldEditing)for(const source of this.document?.field?.sources ?? []) {const anchor=new THREE.Object3D();anchor.position.set(...source.position);anchor.userData={id:source.id,baseSize:[.12,.12,.12],field:true};this.scoringVisual.add(anchor);if(source.id===this.selected)this.transform.attach(anchor);}
     }
     private disposeGroup(group: THREE.Group) {
         group.traverse(o => {
@@ -273,8 +293,9 @@ export class Viewport {
         group.clear();
     }
     setDocument(d: RobotDocument, selected: string) {
+        this.highlightActionFace();
         this.transform.detach();
-        this.document = d;
+        this.document = d;this.makeField();this.frameGeometry=undefined;this.arcKey='';
         this.selected = selected;
         this.robotAimHeight = Math.max(.25, Math.max(d.basics.height, ...d.subsystems.map(s => s.position[2] + s.size[2] / 2)) / 2);
         this.disposeGroup(this.blocks);
@@ -314,7 +335,8 @@ export class Viewport {
             });
             const mesh = new THREE.Mesh(new THREE.BoxGeometry(...s.size), materials);
             mesh.position.set(...s.position);
-            mesh.rotation.z = s.yaw;
+            mesh.rotation.set(s.roll ?? 0,s.pitch ?? 0,s.yaw,'ZYX');
+            mesh.userData.baseSize=[...s.size];
             mesh.castShadow = true;
             mesh.receiveShadow = true;
             mesh.userData.id = s.id;
@@ -336,52 +358,44 @@ export class Viewport {
                 this.transform.attach(mesh);
             }
         }
+        this.renderScoring();
         this.resetPose();
         this.previewArc();
         this.refreshTransform();
     }
     private previewArc() {
-        if (this.arc) {
-            this.robot.remove(this.arc);
-            this.arc.geometry.dispose();
-            (this.arc.material as THREE.Material).dispose();
-            this.arc = undefined;
+        if(!this.document)return;
+        const geometry=this.frameGeometry,subs=this.document.subsystems.map(s=>({...s,...geometry?.find(g=>g.id===s.id)}));
+        const surfaces=this.document.surfaces.filter(a=>{const state=geometry?.find(s=>s.id===a.owner)?.stateId;return a.type==='outtake'&&(!state||!a.stateId||state===a.stateId);});
+        const key=JSON.stringify([subs.map(s=>[s.id,s.position,s.size,s.yaw,s.pitch,s.roll]),surfaces]);
+        if(key===this.arcKey)return;this.arcKey=key;
+        const live=new Set(surfaces.map(s=>s.id));
+        for(const [id,line] of this.arcs)if(!live.has(id)){this.robot.remove(line);line.geometry.dispose();(line.material as THREE.Material).dispose();this.arcs.delete(id);}
+        for(const surface of surfaces) {
+            const sub=subs.find(s=>s.id===surface.owner);if(!sub)continue;
+            const values:number[]=[];
+            for(const points of outputTrajectories(sub,surface,seasonFor(this.document.seasonId).pieceTypes.filter(p=>!surface.accepts||surface.accepts.includes(p.id)).map(p=>p.radius)))for(let i=1;i<points.length;i++)values.push(...points[i-1],...points[i]);
+            let line=this.arcs.get(surface.id);
+            if(!line){line=new THREE.LineSegments(new THREE.BufferGeometry(),new THREE.LineDashedMaterial({color:0xffd348,dashSize:.012,gapSize:.045,transparent:true,opacity:.85}));this.arcs.set(surface.id,line);this.robot.add(line);}
+            const attr=line.geometry.getAttribute('position');
+            if(attr?.array.length===values.length){(attr.array as Float32Array).set(values);attr.needsUpdate=true;}
+            else line.geometry.setAttribute('position',new THREE.Float32BufferAttribute(values,3));
+            line.geometry.computeBoundingSphere();line.computeLineDistances();
         }
-        const d = this.document!, surface = d.surfaces.find(s => s.type === 'outtake');
-        if (!surface)
-            return;
-        const b = d.subsystems.find(s => s.id === surface.owner);
-        if (!b)
-            return;
-        // Visual reference for the sample +X release face; other faces are handled by the worker.
-        if (surface.faces[0] !== '+X')
-            return;
-        const points: THREE.Vector3[] = [], angle = surface.yaw + b.yaw;
-        const origin = new THREE.Vector3(b.position[0] + (b.size[0] / 2 + .135) * Math.cos(b.yaw), b.position[1] + (b.size[0] / 2 + .135) * Math.sin(b.yaw), b.position[2]);
-        for (let t = 0; t < 2.5; t += .025) {
-            const p = origin.clone().add(new THREE.Vector3(Math.cos(angle) * Math.cos(surface.pitch) * surface.speed * t, Math.sin(angle) * Math.cos(surface.pitch) * surface.speed * t, Math.sin(surface.pitch) * surface.speed * t - 4.905 * t * t));
-            if (p.z < 0)
-                break;
-            points.push(p);
-        }
-        this.arc = new THREE.Line(new THREE.BufferGeometry().setFromPoints(points), new THREE.LineDashedMaterial({ color: 0xf1bc66, dashSize: .08, gapSize: .07, transparent: true, opacity: .55 }));
-        this.arc.computeLineDistances();
-        this.robot.add(this.arc);
     }
     resetPose() {
         this.frames.clear();
-        this.robot.position.set(practice.start[0], practice.start[1], 0);
+        this.robot.position.set(seasonFor(this.document?.seasonId ?? 'practice-balls').start[0], seasonFor(this.document?.seasonId ?? 'practice-balls').start[1], 0);
         this.robot.rotation.z = 0;
-        this.updatePieces(practice.pieces.map(p => ({ id: p.id, position: p.position, rotation: [0, 0, 0, 1] })));
-        if (this.arc)
-            this.arc.visible = !this.driver;
+        this.updatePieces(seasonFor(this.document?.seasonId ?? 'practice-balls').pieces.map(p => ({ id:p.id,type:p.type,position:p.position,rotation:[0,0,0,1] as [number,number,number,number] })));
+        this.frameGeometry=undefined;this.arcKey='';this.previewArc();
     }
     update(s: Snapshot) {
         this.frames.push(s, performance.now());
         const counts = new Map<string, number>();
         for (const token of s.tokens) counts.set(token.owner, (counts.get(token.owner) ?? 0) + 1);
         for (const block of this.document?.subsystems ?? []) {
-            const uniform = this.fillUniforms.get(block.id), fraction = inventoryFraction((counts.get(block.id) ?? 0), block.capacity);
+            const uniform = this.fillUniforms.get(block.id), fraction = inventoryFraction((counts.get(block.id) ?? 0), s.subsystems?.find(g=>g.id===block.id)?.capacity ?? block.capacity);
             if (uniform)
                 uniform.value = fraction;
             const cap = this.fillCaps.get(block.id);
@@ -390,8 +404,24 @@ export class Viewport {
                 cap.position.z = -block.size[2] / 2 + block.size[2] * fraction;
             }
         }
-        if (this.arc)
-            this.arc.visible = false;
+        for(const row of s.fieldInventory ?? []){const goal=this.document?.field?.scoringElements.find(g=>g.id===row.element),fill=this.fieldFills.get(row.element);if(!goal||!fill)continue;const f=Math.min(1,row.pieces.length/goal.capacity);fill.visible=f>0;fill.scale.z=f;fill.position.z=-goal.size[2]/2+goal.size[2]*f/2;}
+        this.frameGeometry=s.subsystems;this.previewArc();
+    }
+    actionTarget(x:number,y:number,valid:(owner:string,face:Face)=>boolean) {
+        if(!this.editing||this.driver)return;
+        return nearestActionFace(this.camera,[...(this.fieldEditing?this.fieldMeshes:this.meshes).values()],this.renderer.domElement.getBoundingClientRect(),x,y,valid);
+    }
+    setActionDragging(on:boolean) {
+        this.assigningAction=on;this.controls.enabled=!on&&!this.driver&&!this.drawing;this.refreshTransform();
+    }
+    highlightActionFace(target?:FaceTarget) {
+        const key=target?target.owner+':'+target.face:'';if(key===this.actionHighlightKey)return;
+        this.actionHighlightKey=key;
+        if(this.actionHighlight){this.actionHighlight.removeFromParent();this.actionHighlight.geometry.dispose();(this.actionHighlight.material as THREE.Material).dispose();this.actionHighlight=undefined;}
+        if(!target)return;const mesh=(this.fieldEditing?this.fieldMeshes:this.meshes).get(target.owner);if(!mesh)return;
+        const base=mesh.userData.baseSize as Vec3,axis=target.face.endsWith('X')?0:target.face.endsWith('Y')?1:2,sign=target.face[0]==='+'?1:-1;
+        const highlight=new THREE.Mesh(new THREE.BoxGeometry(1,1,1),new THREE.MeshBasicMaterial({color:0xffdc45,transparent:true,opacity:.6,depthWrite:false}));
+        highlight.scale.set(...base);highlight.scale.setComponent(axis,.004);highlight.position.setComponent(axis,sign*(base[axis]/2+.003));mesh.add(highlight);this.actionHighlight=highlight;
     }
     setTransformMode(mode: 'translate' | 'scale') { this.transform.setMode(mode); this.refreshTransform(); }
     navigateKey(event: KeyboardEvent): boolean {
@@ -420,7 +450,7 @@ export class Viewport {
         return true;
     }
     setEditing(on: boolean) { this.editing = on; this.refreshTransform(); }
-    private refreshTransform() { this.transform.enabled = this.editing && !this.drawing && !this.driver; this.transform.getHelper().visible = this.transform.enabled && !!this.transform.object; }
+    private refreshTransform() { this.transform.enabled = this.editing && !this.drawing && !this.driver && !this.assigningAction; this.transform.getHelper().visible = this.transform.enabled && !!this.transform.object; }
     private robotTarget() {
         this.aim.copy(this.robot.position); this.aim.z += this.robotAimHeight; return this.aim;
     }
@@ -440,8 +470,8 @@ export class Viewport {
         }
         this.station = station;
         this.driver = on;
-        if (this.arc) this.arc.visible = !on && this.editing;
-        this.driverEye.set(...stationCameraPosition(station, practice.length, practice.width));
+
+        this.driverEye.set(...stationCameraPosition(station,seasonFor(this.document?.seasonId ?? 'practice-balls').length,seasonFor(this.document?.seasonId ?? 'practice-balls').width));
         if (entering) {
             this.camera.position.copy(this.driverEye);
             this.driverAim.copy(this.robotTarget());
@@ -461,26 +491,28 @@ export class Viewport {
         const alpha = this.frames.alpha(now);
         this.robot.position.set(previous.pose.x + (frame.pose.x - previous.pose.x) * alpha, previous.pose.y + (frame.pose.y - previous.pose.y) * alpha, 0);
         this.robot.rotation.z = blendYaw(previous.pose.yaw, frame.pose.yaw, alpha);
+        if(frame.subsystems) {
+            this.frameGeometry=frame.subsystems.map(g=>{
+                const from=previous.subsystems?.find(s=>s.id===g.id) ?? g;
+                return {...g,position:g.position.map((v,i)=>from.position[i]+(v-from.position[i])*alpha) as Vec3,size:g.size.map((v,i)=>from.size[i]+(v-from.size[i])*alpha) as Vec3,yaw:blendSubsystemYaw(from.yaw,g.yaw,alpha,this.document?.subsystems.find(s=>s.id===g.id)),pitch:blendYaw(from.pitch,g.pitch,alpha),roll:blendYaw(from.roll,g.roll,alpha)};
+            });
+            for(const g of this.frameGeometry) {
+                const mesh=this.meshes.get(g.id);if(!mesh)continue;
+                mesh.position.set(...g.position);const base=mesh.userData.baseSize as Vec3;mesh.scale.set(g.size[0]/base[0],g.size[1]/base[1],g.size[2]/base[2]);mesh.rotation.set(g.roll,g.pitch,g.yaw,'ZYX');
+                for(const [i,material] of (mesh.material as THREE.MeshStandardMaterial[]).entries()) {
+                    const action=this.document?.surfaces.find(a=>a.owner===g.id && (!a.stateId||a.stateId===g.stateId) && a.faces.includes(FACES[i]));material.color.setHex(action?colors[action.type]:colors.white);if(material.transparent===g.solid){material.transparent=!g.solid;material.needsUpdate=true;}material.opacity=g.solid?1:.8;
+                }
+            }
+            this.previewArc();
+        }
         this.updatePieces(frame.pieces, alpha);
     }
-    private updatePieces(pieces: Snapshot['pieces'], alpha = 1) {
-        if (pieces.length > this.pieceMesh.instanceMatrix.count) {
-            const old = this.pieceMesh;
-            this.pieceMesh = new THREE.InstancedMesh(old.geometry, old.material, pieces.length * 2);
-            this.pieceMesh.castShadow = true; this.pieceMesh.frustumCulled = false;
-            this.pieceMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-            this.balls.remove(old); old.dispose(); this.balls.add(this.pieceMesh);
+    private updatePieces(pieces:Snapshot['pieces'],alpha=1) {
+        const season=seasonFor(this.document?.seasonId ?? 'practice-balls');
+        for(const [type,existing] of this.pieceMeshes){const group=pieces.filter(p=>(p.type ?? season.pieceTypes[0].id)===type);let mesh=existing;
+            if(group.length>mesh.instanceMatrix.count){mesh=new THREE.InstancedMesh(existing.geometry,existing.material,group.length*2);mesh.castShadow=true;mesh.frustumCulled=false;mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);this.balls.remove(existing);existing.dispose();this.balls.add(mesh);this.pieceMeshes.set(type,mesh);}mesh.count=group.length;
+            group.slice(0,mesh.count).forEach((p,index)=>{const from=this.frames.previousPieces.get(p.id) ?? p;this.instanceTransform.position.set(...p.position.map((v,i)=>from.position[i]+(v-from.position[i])*alpha) as Vec3);this.fromRotation.set(...from.rotation);this.toRotation.set(...p.rotation);this.instanceTransform.quaternion.slerpQuaternions(this.fromRotation,this.toRotation,alpha);this.instanceTransform.updateMatrix();mesh.setMatrixAt(index,this.instanceTransform.matrix);});mesh.instanceMatrix.needsUpdate=true;
         }
-        this.pieceMesh.count = pieces.length;
-        pieces.forEach((p, index) => {
-            const from = this.frames.previousPieces.get(p.id) ?? p;
-            this.instanceTransform.position.set(from.position[0] + (p.position[0] - from.position[0]) * alpha, from.position[1] + (p.position[1] - from.position[1]) * alpha, from.position[2] + (p.position[2] - from.position[2]) * alpha);
-            this.fromRotation.set(...from.rotation); this.toRotation.set(...p.rotation);
-            this.instanceTransform.quaternion.slerpQuaternions(this.fromRotation, this.toRotation, alpha);
-            this.instanceTransform.updateMatrix();
-            this.pieceMesh.setMatrixAt(index, this.instanceTransform.matrix);
-        });
-        this.pieceMesh.instanceMatrix.needsUpdate = true;
     }
     private resize() {
         const w = this.host.clientWidth, h = this.host.clientHeight;
@@ -539,11 +571,13 @@ export class Viewport {
         if (on)
             this.view('top');
     }
-    private coords(e: PointerEvent | MouseEvent) { const r = this.renderer.domElement.getBoundingClientRect(); this.pointer.set((e.clientX - r.left) / r.width * 2 - 1, -(e.clientY - r.top) / r.height * 2 + 1); this.ray.setFromCamera(this.pointer, this.camera); }
+    private coords(e: PointerEvent | MouseEvent | DragEvent) { const r = this.renderer.domElement.getBoundingClientRect(); this.pointer.set((e.clientX - r.left) / r.width * 2 - 1, -(e.clientY - r.top) / r.height * 2 + 1); this.ray.setFromCamera(this.pointer, this.camera); }
     private ground(e: PointerEvent) { this.coords(e); const point = new THREE.Vector3(); return this.ray.ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 0, 1), -.275), point) ?? undefined; }
     private hit(e: PointerEvent | MouseEvent, face: boolean) {
         this.coords(e);
-        const hit = this.ray.intersectObjects([...this.meshes.values()], false)[0];
+        const candidates=[...(this.fieldEditing?this.fieldMeshes:this.meshes).values()];
+        for(const mesh of candidates)mesh.updateWorldMatrix(true,false);
+        const hit = this.ray.intersectObjects(candidates, false)[0];
         if (hit) {
             const f = FACES[Math.floor((hit.faceIndex ?? 0) / 2)];
             this.onSelect(hit.object.userData.id, face ? f : undefined);

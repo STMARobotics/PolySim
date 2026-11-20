@@ -1,21 +1,14 @@
-import { syncSurfaceLinks, type RobotDocument, type Vec3 } from '../contracts/model';
-export const practice = {
-    id: 'practice-balls', title: 'Practice Lab', version: '1.0.0',
-    length: 12, width: 8, radius: 0.09, mass: 0.27,
-    start: [-3.8, 0, 0] as Vec3,
-    target: { x: 4.75, y: 0, width: 2, height: 1.8, depth: 0.7 },
-    obstacle: { x: 0.3, y: 2.5, length: 1.3, width: 0.5, height: 0.5 },
-    // Deliberately fixed fixture. No random hidden variation in this first build.
-    pieces: Array.from({ length: 18 }, (_, i) => ({ id: `ball-${i + 1}`, position: [-2.3 + (i % 6) * 0.8, (Math.floor(i / 6) - 1) * 0.65, 0.11] as Vec3 })),
-};
+import {syncSurfaceLinks,type RobotDocument} from '../contracts/model';
+import {practice} from './practice-field';
+export {practice} from './practice-field';
 export function sampleRobot(): RobotDocument {
     return syncSurfaceLinks({
         schemaVersion: 1, id: crypto.randomUUID(), name: 'Atlas · collector prototype', seasonId: practice.id, revision: 1,
         basics: { length: 0.85, width: 0.78, height: 0.22, mass: 52, wheelDiameter: 0.1016, reduction: 6.75, motorRPM: 6380, loadedSpeed: 3.5, acceleration: 3, angularSpeed: 3 },
         subsystems: [
-            { id: 'collector', name: 'Collector', position: [0.51, 0, 0.18], size: [0.32, 0.7, 0.32], yaw: 0, capacity: 1, solid: false },
-            { id: 'hopper', name: 'Hopper', position: [0, 0, 0.45], size: [0.52, 0.58, 0.4], yaw: 0, capacity: 4, solid: false },
-            { id: 'launcher', name: 'Launcher', position: [0.24, 0, 0.8], size: [0.34, 0.4, 0.3], yaw: 0, capacity: 1, solid: false },
+            { id: 'collector', name: 'Collector', position: [0.51, 0, 0.18], size: [0.32, 0.7, 0.32], yaw: 0, capacity: 1, solid: true },
+            { id: 'hopper', name: 'Hopper', position: [0, 0, 0.45], size: [0.52, 0.58, 0.4], yaw: 0, capacity: 4, solid: true },
+            { id: 'launcher', name: 'Launcher', position: [0.24, 0, 0.8], size: [0.34, 0.4, 0.3], yaw: 0, capacity: 1, solid: true },
         ],
         surfaces: [
             { id: 'intake', name: 'Front intake', owner: 'collector', faces: ['+X'], type: 'intake', interval: 0.2, speed: 8, yaw: 0, pitch: 0.48, spin: [0, 0, 0] },

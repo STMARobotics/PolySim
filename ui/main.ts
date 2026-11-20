@@ -1,3 +1,12 @@
+import {ensureField} from '../contracts/field-validation';
+import {seasons,seasonFor,pieceTypesFor,acceptedTypes,createSeasonRobot} from '../seasons/registry';
+import {fieldTree,fieldInspector} from './field-editor';
+import {snapDocumentInches} from '../contracts/inch-grid';
+import {TRIGGER_OPTIONS} from '../contracts/triggers';
+import {TARGETING_OPTIONS,isTurretMode,DEFAULT_TARGETING_FREEDOM} from '../contracts/targeting';
+import {ActionBeam} from './action-beam';
+import {subsystemTree} from './tree-model';
+import {ensureStates,syncDefaults,previewDocument,addState,duplicateSubsystem} from '../contracts/states';
 import './style.css';
 import './workspace.css';
 import { clone, createAction, DT, ENGINE_VERSION, syncSurfaceLinks, surfaceForEdge, FACES, freeSpeed, id, nodeName, parseDocument, ticksFor, validConnection, validate, type Face, type RobotDocument, type Surface, type Vec3 } from '../contracts/model';
@@ -12,12 +21,16 @@ import { normalizeBinding, bindingLabel } from '../contracts/bindings';
 import { nextNodePosition } from './editor-model';
 import type { DriverStation } from './camera-model';
 import { SimulationClient } from '../simulation/client';
-import { displayValue, storedValue, displayIssue } from './units';
+import { displayValue, storedValue, displayIssue, propertyStep, inchProperty, inchInputLimits } from './units';
 import { keyboardDrive } from './drive-controls';
 if (cloudEnabled()) for (const [id, revision] of Object.entries(readCloudRevisions())) trackRevision(id, revision);
 let saving = false;
-let doc = readDraft() ?? sampleRobot(), selected = doc.id, selectedFace: Face = '+X';
+let doc = snapDocumentInches(ensureStates(readDraft() ?? createSeasonRobot('reefscape-2025'))), selected = doc.id, selectedFace: Face = '+X';
 let mode: 'edit' | 'running' | 'paused' = 'edit', snapshot: Snapshot | undefined, workerReady = false, pendingPlay = false, isReplay = false;
+let librarySeason=doc.seasonId;
+let inspectorScope:'robot'|'field'='robot';
+let graphMode: 'travel'|'states'='travel', stateOwner='', stateEdgeSelection='';
+const openStates:Record<string,string|undefined>={};
 type WorkspaceView = 'edit' | 'graph' | 'drive';
 let activeView: WorkspaceView = 'edit', transformMode: 'translate' | 'scale' = 'translate';
 let propertiesVisible = true, driverStation: DriverStation = 2, simulationDirty = true;
@@ -37,9 +50,9 @@ root.innerHTML = `
   </header>
   <nav class="workspace-nav" aria-label="Workspace views" role="tablist"><h1 id="robot-title"></h1>${([['edit', 'Edit'], ['graph', 'Graph'], ['drive', 'Drive']] as const).map(([v, label]) => `<button role="tab" id="tab-${v}" aria-selected="${v === 'edit'}" aria-controls="workspace" data-action="workspace:${v}">${label}</button>`).join('')}</nav>
   <main class="workspace" id="workspace" data-view="edit" data-properties="visible">
-    <section class="stage" aria-label="3D editor"><div class="viewport-toolbar"><div class="edit-tools">${button('transform:translate', 'Move', 'text-button active', 'Drag the X, Y or Z handles')}${button('transform:scale', 'Resize', 'text-button', 'Drag the X, Y or Z handles')}</div><div class="station-tools" role="group" aria-label="Driver station"><span>Station</span>${([1, 2, 3] as const).map(n => `<button data-action="station:${n}" aria-label="Driver station ${n}" aria-pressed="${n === 2}">${n}</button>`).join('')}</div><span id="field-selection" class="selection-name"></span><button id="properties-show" class="secondary hidden" data-action="properties:show" aria-controls="properties-pane" aria-expanded="true">Inspector</button></div><div id="viewport"><div class="viewport-caption"><span class="view-tag" id="mode-tag">Edit</span></div><div class="runtime-hud" id="runtime-hud"><div><small>Pickups</small><strong id="hud-pickups">0</strong></div><div><small>Score</small><strong id="hud-score">0</strong></div></div><div class="viewport-hint" id="viewport-hint"></div></div><div class="drivebar"><div class="drive-keys" title="WASD: translate. Left/right arrows: rotate."><kbd>WASD</kbd><kbd>←/→</kbd></div><div id="action-controls"></div><span class="drive-note" id="drive-note"></span></div></section>
-    <aside class="inspector" id="properties-pane" aria-label="Robot inspector"><section class="robot-section"><div class="panel-title"><span>Robot <span id="sub-count" class="count"></span></span><button class="text-button" data-action="properties:hide" aria-controls="properties-pane" aria-expanded="true">Hide</button></div><div class="robot-structure"><button class="robot-row" data-select="robot"><span class="robot-icon">▧</span><strong>Robot basics</strong></button><div id="tree"></div></div><div class="robot-tools">${button('add', '＋ Subsystem', 'secondary')}${button('export', 'Export', 'text-button', 'Export robot JSON')}${button('import', 'Import', 'text-button', 'Import robot JSON')}</div></section><div class="panel-title properties-heading"><span>Properties</span></div><div id="inspector"></div></aside>
-    <section class="graph-panel" aria-label="Travel Path view"><div class="graph-toolbar"><span id="graph-selection" class="selection-name"></span><div class="graph-actions">${button('add-graph', '＋ Module', 'text-button')}${button('connect', '＋ Connection', 'text-button')}${button('graph-out', '−', 'icon-button', 'Zoom out')}${button('graph-in', '＋', 'icon-button', 'Zoom in')}${button('graph-fit', 'Fit', 'text-button')}<button class="secondary inspector-show hidden" data-action="properties:show" aria-controls="properties-pane">Inspector</button></div></div><div id="graph"></div></section>
+    <section class="stage" aria-label="3D editor"><div class="viewport-toolbar"><div class="edit-tools">${button('transform:translate', 'Move', 'text-button active', 'Drag the X, Y or Z handles')}${button('transform:scale', 'Resize', 'text-button', 'Drag the X, Y or Z handles')}</div><div class="station-tools" role="group" aria-label="Driver station"><span>Station</span>${([1, 2, 3] as const).map(n => `<button data-action="station:${n}" aria-label="Driver station ${n}" aria-pressed="${n === 2}">${n}</button>`).join('')}</div>${button('restart-drive','Restart','text-button restart-drive')}<span id="field-selection" class="selection-name"></span><button id="properties-show" class="secondary hidden" data-action="properties:show" aria-controls="properties-pane" aria-expanded="true">Inspector</button></div><div id="viewport"><div class="viewport-caption"><span class="view-tag" id="mode-tag">Edit</span></div><div class="runtime-hud" id="runtime-hud"><div><small>Pickups</small><strong id="hud-pickups">0</strong></div><div><small>Score</small><strong id="hud-score">0</strong></div></div><div class="viewport-hint" id="viewport-hint"></div></div><div class="drivebar"><div class="drive-keys" title="WASD: translate. Left/right arrows: rotate."><kbd>WASD</kbd><kbd>←/→</kbd></div><div id="action-controls"></div><span class="drive-note" id="drive-note"></span></div></section>
+    <aside class="inspector" id="properties-pane" aria-label="Robot inspector"><section class="robot-section"><div class="panel-title"><div class="inspector-scopes">${button('scope:robot','Robot','scope-tab active')}${button('scope:field','Field','scope-tab')}<span id="sub-count" class="count"></span></div><button class="text-button" data-action="properties:hide" aria-controls="properties-pane" aria-expanded="true">Hide</button></div><div class="robot-structure"><button class="robot-row" data-select="robot"><span class="robot-icon">▧</span><strong>Robot basics</strong></button><div id="tree"></div></div><div class="robot-tools">${button('add', '＋ Subsystem', 'secondary')}${button('export', 'Export', 'text-button', 'Export robot JSON')}${button('import', 'Import', 'text-button', 'Import robot JSON')}</div></section><div class="panel-title properties-heading"><span>Robot</span></div><div id="inspector"></div></aside>
+    <section class="graph-panel" aria-label="Travel Path view"><div class="graph-toolbar"><div class="graph-mode-tabs">${button('graph-mode:travel','Travel Path','text-button active')}${button('graph-mode:states','States','text-button')}</div><span id="graph-selection" class="selection-name"></span><div class="graph-actions">${button('add-graph', '＋ Module', 'text-button')}${button('connect', '＋ Connection', 'text-button')}${button('graph-out', '−', 'icon-button', 'Zoom out')}${button('graph-in', '＋', 'icon-button', 'Zoom in')}${button('graph-fit', 'Fit', 'text-button')}<button class="secondary inspector-show hidden" data-action="properties:show" aria-controls="properties-pane">Inspector</button></div></div><div id="graph"></div></section>
   </main><footer class="statusbar"><button id="validation-summary" data-action="validation"></button><span id="runtime-status"></span></footer><div id="toast" role="status" aria-live="polite"></div><dialog id="modal"><div id="modal-content"></div></dialog><input id="file-input" type="file" accept=".json,application/json" hidden />`;
 const $ = <T extends Element = HTMLElement>(s: string) => document.querySelector<T>(s)!;
 const toast = (message: string) => { const el = $('#toast'); el.textContent = message; el.classList.add('show'); clearTimeout(toastTimer); toastTimer = setTimeout(() => el.classList.remove('show'), 5000); };
@@ -76,42 +89,84 @@ const commit = (change: (d: RobotDocument) => void) => {
         undo.shift();
     redo = [];
     change(doc);
+    snapDocumentInches(doc);
+    syncDefaults(doc);
     syncSurfaceLinks(doc);
+    for(const action of doc.surfaces)if(!doc.layout[action.id])doc.layout[action.id]=nextNodePosition(doc);
     simulationDirty = true;
     dirty = true;
     safeSaveDraft();
     render();
 };
-const select = (which: string) => { selected = which; render(); };
+const select = (which: string) => {
+    selected=which;stateEdgeSelection='';
+    const stateSub=doc.subsystems.find(s=>s.states!.some(t=>t.id===which)),edgeSub=doc.subsystems.find(s=>s.stateTransitions!.some(e=>e.id===which));
+    if(stateSub){selected=stateSub.id;stateOwner=stateSub.id;openStates[stateSub.id]=which;render();return;}
+    if(edgeSub){selected=edgeSub.id;stateOwner=edgeSub.id;stateEdgeSelection=which;render();return;}
+    const sub=doc.subsystems.find(s=>s.id===which),surface=doc.surfaces.find(s=>s.id===which);
+    if(sub){stateOwner=sub.id;if(!(sub.id in openStates))openStates[sub.id]=sub.states!.find(s=>s.isDefault)!.id;}
+    if(surface){stateOwner=surface.owner;openStates[surface.owner]=surface.stateId;}
+    render();
+};
+const currentState=(sub:typeof doc.subsystems[number])=>sub.states!.find(s=>s.id===openStates[sub.id]) ?? sub.states!.find(s=>s.isDefault)!;
+function stateGraphDocument():RobotDocument {
+    const sub=doc.subsystems.find(s=>s.id===stateOwner);
+    return {...doc,subsystems:(sub?.states ?? []).map(state=>({id:state.id,name:state.name,position:state.position,size:state.size,yaw:state.yaw,capacity:state.capacity,solid:!state.ignoreCollision})),surfaces:[],edges:(sub?.stateTransitions ?? []).map(e=>({...e,priority:0,concurrency:1})),layout:sub?.stateLayout ?? {}};
+}
+function selectGraph(which:string) {
+    if(graphMode==='travel'){select(which);return;}
+    const sub=doc.subsystems.find(s=>s.id===stateOwner);if(!sub)return;
+    selected=sub.id;
+    if(sub.states!.some(s=>s.id===which)){openStates[sub.id]=which;stateEdgeSelection='';}else stateEdgeSelection=which;
+    render();
+}
+function assignFace(owner:string,face:Face,type:Surface['type']|'score') {
+    if(type==='score'){const goal=doc.field!.scoringElements.find(g=>g.id===owner);if(!goal)return;if(goal.surfaces.some(s=>s.faces.includes(face))){toast('That face already has a scoring surface.');return;}commit(d=>{const g=d.field!.scoringElements.find(g=>g.id===owner)!;const surface={id:id(),name:g.name+' Surface',faces:[face],accepts:[...g.accepts]};g.surfaces.push(surface);selected=surface.id;});return;}
+
+    const sub=doc.subsystems.find(s=>s.id===owner);if(!sub)return;
+    const state=currentState(sub);
+    if(doc.surfaces.some(s=>s.owner===owner&&s.stateId===state.id&&s.faces.includes(face))){toast('That face already has an action in this state.');return;}
+    commit(d=>{const action={...createAction(sub,type,face),stateId:state.id};d.surfaces.push(action);d.layout[action.id]=nextNodePosition(d);selected=action.id;stateOwner=owner;openStates[owner]=state.id;});
+}
+
 let viewport: Viewport | undefined;
 try {
     viewport = new Viewport($('#viewport'), (which, face) => {
-        selected = which;
         if (face) {
             selectedFace = face;
             toast(`${face} face selected. Assign an action in the inspector.`);
         }
-        render();
+        select(which);
     }, (position, size) => {
         if (mode !== 'edit')
             return;
-        const b = { id: id(), name: 'New subsystem', position, size, yaw: 0, capacity: 1, solid: false };
+        const b = { id: id(), name: 'New subsystem', position, size, yaw: 0, capacity: 1, solid: true };
         commit(d => { d.subsystems.push(b); d.layout[b.id] = nextNodePosition(d); selected = b.id; });
         drawing = false;
         viewport?.setDrawing(false);
         render();
     }, (which, position, size) => commit(d => {
+        const goal=d.field?.scoringElements.find(g=>g.id===which),source=d.field?.sources.find(g=>g.id===which);if(goal){goal.position=position;goal.size=size;return;}if(source){source.position=position;return;}
         const block = d.subsystems.find(s => s.id === which);
         if (block) {
-            block.position = position;
-            block.size = size;
+            const state=currentState(block);state.position=position;state.size=size;
         }
     }));
 }
 catch (e) {
     $('#viewport').insertAdjacentHTML('beforeend', `<div class="viewport-error"><h3>3D viewport unavailable</h3><p>Enable WebGL in a current desktop browser. The graph and numeric editor remain available.</p><small>${esc(e)}</small></div>`);
 }
-const graph = new GraphView($('#graph'), select, (which, p) => commit(d => { d.layout[which] = p; }), (a, b) => addConnection(a, b), which => { select(which); setPropertiesVisible(true); });
+const graph = new GraphView($('#graph'), selectGraph, (which,p)=>commit(d=>{if(graphMode==='travel')d.layout[which]=p;else d.subsystems.find(s=>s.id===stateOwner)!.stateLayout![which]=p;}), (a,b,type)=>{
+    if(graphMode==='travel'){addConnection(a,b,type);return;}
+    const sub=doc.subsystems.find(s=>s.id===stateOwner);if(!sub||a===b||!sub.states!.some(s=>s.id===a)||!sub.states!.some(s=>s.id===b))return;
+    if(sub.stateTransitions!.some(e=>e.source===a&&e.target===b)){toast('That state transition already exists.');return;}
+    commit(d=>{const edge={id:id(),source:a,target:b,duration:.5,key:'u',trigger:'press' as const};d.subsystems.find(s=>s.id===stateOwner)!.stateTransitions!.push(edge);stateEdgeSelection=edge.id;selected=stateOwner;});
+}, which=>{selectGraph(which);setPropertiesVisible(true);});
+
+new ActionBeam(root,()=>mode==='edit'&&activeView==='edit',(x,y)=>viewport?.actionTarget(x,y,(owner,face)=>{
+    if(inspectorScope==='field'){const goal=doc.field!.scoringElements.find(g=>g.id===owner);return !!goal&&!goal.surfaces.some(s=>s.faces.includes(face));}
+    const sub=doc.subsystems.find(s=>s.id===owner);return !!sub && !doc.surfaces.some(a=>a.owner===owner&&a.stateId===currentState(sub).id&&a.faces.includes(face));
+}),target=>viewport?.highlightActionFace(target),on=>viewport?.setActionDragging(on),(target,type)=>assignFace(target.owner,target.face,type));
 const worker = new SimulationClient(() => new Worker(new URL('../simulation/worker.ts', import.meta.url), { type: 'module' }), location.protocol === 'file:' || new URLSearchParams(location.search).get('simulation') === 'local');
 const send = (message: ToWorker) => worker.postMessage(message);
 worker.onmessage = ({ data }: {
@@ -171,7 +226,8 @@ function load(next: RobotDocument) {
     if (mode !== 'edit')
         send({ type: 'pause' });
     mode = 'edit';
-    doc = syncSurfaceLinks(clone(next));
+    doc = syncSurfaceLinks(ensureStates(snapDocumentInches(ensureField(clone(next)))));librarySeason=doc.seasonId;
+    stateEdgeSelection='';stateOwner='';
     simulationDirty = true;
     selected = doc.id;
     undo = [];
@@ -214,17 +270,23 @@ function render() {
     renderShell();
     renderTree();
     renderInspector();
-    viewport?.setDocument(doc, selected);
+    viewport?.setFieldEditing(inspectorScope==='field'&&activeView==='edit');
+    viewport?.setDocument(activeView==='drive'?doc:previewDocument(doc,openStates), selected);
     if (mode !== 'edit' && snapshot)
         viewport?.update(snapshot);
     if (viewport)
         viewport.setEditing(mode === 'edit' && activeView === 'edit');
-    graph.set(doc, selected, mode === 'edit');
+    $('.graph-panel').setAttribute('aria-label',graphMode==='states'?'Subsystem states view':'Travel Path view');
+    graph.nodeTypeLabel=graphMode==='states'?'State':'Subsystem';
+    graph.defaultStateId=graphMode==='states'?(doc.subsystems.find(s=>s.id===stateOwner)?.states?.find(t=>t.isDefault)?.id ?? ''):'';
+    graph.set(graphMode==='states'?stateGraphDocument():doc,graphMode==='states'?(stateEdgeSelection||openStates[stateOwner]||''):selected,mode==='edit');
+    document.querySelectorAll<HTMLElement>('[data-action^="graph-mode:"]').forEach(el=>el.classList.toggle('active',el.dataset.action==='graph-mode:'+graphMode));
     if (snapshot && mode !== 'edit')
         graph.update(snapshot);
     updateRuntime();
 }
 function renderShell() {
+    const sourceSelected=inspectorScope==='field'&&doc.field!.sources.some(s=>s.id===selected);if(sourceSelected&&transformMode==='scale'){transformMode='translate';viewport?.setTransformMode('translate');}
     $('#robot-title').textContent = doc.name;
     $('#save-status').textContent = saving ? 'Saving…' : dirty ? (cloudEnabled() ? 'Unsynced' : 'Draft') : cloudEnabled() ? (sharedRevision(doc.id) ? `Shared · rev ${sharedRevision(doc.id)}` : 'Local draft') : 'Saved';
     $<HTMLButtonElement>('[data-action="save"]').disabled = mode !== 'edit' || saving;
@@ -247,8 +309,8 @@ function renderShell() {
     $('#field-selection').textContent = activeView === 'drive' || nodeName(doc, selected) === 'Missing node' ? '' : nodeName(doc, selected);
     $('#graph-selection').textContent = [...doc.subsystems, ...doc.surfaces, ...doc.edges].some(n => n.id === selected) ? (doc.edges.some(e => e.id === selected) ? 'Connection' : nodeName(doc, selected)) : '';
     document.querySelectorAll<HTMLElement>('[data-action^="transform:"]').forEach(b => b.classList.toggle('active', b.dataset.action === 'transform:' + transformMode));
-    const actions = [...new Set(doc.edges.map(e => normalizeBinding(e.key)!))];
-    $('#action-controls').innerHTML = actions.map(k => `<button class="action-control" data-hold="${esc(k)}" ${mode === 'edit' || isReplay ? 'disabled' : ''}><kbd>${esc(bindingLabel(k))}</kbd>${esc(surfaceForEdge(doc, doc.edges.find(e => normalizeBinding(e.key) === k)!)?.type ?? 'Transfer')}</button>`).join('');
+    const actions = [...new Set([...doc.edges,...doc.subsystems.flatMap(s=>s.stateTransitions ?? [])].map(e => normalizeBinding(e.key)!))];
+    $('#action-controls').innerHTML = actions.map(k => `<button class="action-control" data-hold="${esc(k)}" ${mode === 'edit' || isReplay ? 'disabled' : ''}><kbd>${esc(bindingLabel(k))}</kbd>${esc((doc.edges.find(e=>normalizeBinding(e.key)===k) ? surfaceForEdge(doc,doc.edges.find(e=>normalizeBinding(e.key)===k)!)?.type ?? 'Transfer' : 'State'))}</button>`).join('');
     $('#action-controls').querySelectorAll<HTMLButtonElement>('[data-hold]').forEach(b => {
         b.addEventListener('pointerdown', e => { virtual.add(b.dataset.hold!); b.setPointerCapture(e.pointerId); b.classList.add('held'); sendControls(); });
         const release = () => { virtual.delete(b.dataset.hold!); b.classList.remove('held'); sendControls(); };
@@ -257,45 +319,71 @@ function renderShell() {
     });
     const issues = validate(doc), errors = issues.filter(i => i.level === 'error').length;
     $('#validation-summary').innerHTML = `<span class="${errors ? 'error-text' : 'valid-text'}">${errors ? '⚠ ' + errors + ' errors' : '✓ Valid'}</span>`;
-    $('#sub-count').textContent = String(doc.subsystems.length);
+    if(sourceSelected)$<HTMLButtonElement>('[data-action="transform:scale"]').disabled=true;
+    $('#sub-count').textContent=String(inspectorScope==='field'?doc.field!.scoringElements.length:doc.subsystems.length);
+    document.querySelectorAll<HTMLElement>('[data-action^="scope:"]').forEach(el=>el.classList.toggle('active',el.dataset.action==='scope:'+inspectorScope));
+    $('[data-select="robot"] strong').textContent=inspectorScope==='field'?'Field overview':'Robot basics';
+    $('[data-action="add"]').textContent=inspectorScope==='field'?'＋ Scoring element':'＋ Subsystem';
 }
 function renderTree() {
+    if(inspectorScope==='field'){$('#tree').innerHTML=fieldTree(doc,selected);return;}
     $('[data-select="robot"]').classList.toggle('selected', selected === doc.id);
-    $('#tree').innerHTML = doc.subsystems.map(s => `<div class="tree-group"><button class="tree-row ${selected === s.id ? 'selected' : ''}" data-select="${esc(s.id)}"><span class="cube-icon">◇</span><span>${esc(s.name)}</span><small>${s.capacity}</small></button>${doc.surfaces.filter(a => a.owner === s.id).map(a => `<button class="tree-surface ${selected === a.id ? 'selected' : ''}" data-select="${esc(a.id)}"><i class="swatch ${a.type}"></i><span>${esc(a.name)}</span></button>`).join('')}</div>`).join('');
+    $('#tree').innerHTML = subsystemTree(doc).map(({subsystem:sub,states})=>`<div class="tree-group"><button class="tree-row ${selected===sub.id?'selected':''}" data-select="${esc(sub.id)}"><span class="cube-icon">◇</span><span>${esc(sub.name)}</span><small>${sub.capacity}</small></button>${states.map(({state,actions})=>`<div class="tree-state-group"><button class="tree-state ${selected===sub.id&&openStates[sub.id]===state.id?'selected':''}" data-select="${esc(state.id)}" aria-label="${esc(sub.name+' / '+state.name)}"><span class="state-marker">${state.isDefault?'●':'◇'}</span><span>${esc(state.name)}</span></button>${actions.map(action=>`<button class="tree-surface tree-action ${selected===action.id?'selected':''}" data-select="${esc(action.id)}" aria-label="${esc(sub.name+' / '+state.name+' / '+action.name)}"><i class="swatch ${action.type}"></i><span>${esc(action.name)}</span></button>`).join('')}</div>`).join('')}</div>`).join('');
 }
 const bindingField = (path: string, value: string) => `<label class="field"><span>Key</span><button type="button" aria-label="Key binding ${esc(bindingLabel(value))}" title="Click, then press a key" class="binding-capture ${capturingBinding?.id === selected && capturingBinding.path === path ? 'recording' : ''}" data-bind="${path}" ${mode !== 'edit' ? 'disabled' : ''}>${capturingBinding?.id === selected && capturingBinding.path === path ? 'Press a key…' : esc(bindingLabel(value))}</button></label>`;
-const field = (label: string, key: string, value: string | number, type = 'number', step = '0.01', help = '') => `<label class="field"><span>${label}</span><input data-field="${key}" type="${type}" value="${esc(typeof value === 'number' ? displayValue(key, value) : value)}" step="${step}" ${mode !== 'edit' ? 'disabled' : ''} />${help ? `<small>${help}</small>` : ''}</label>`;
+const field = (label: string, key: string, value: string | number, type = 'number', step = '0.01', help = '') => `<label class="field"><span>${label}</span><input data-field="${key}" type="${type}" value="${esc(typeof value === 'number' ? displayValue(key, value) : value)}" step="${propertyStep(key,step)}" ${key==='sub.targetingFreedom'?'min="0" max="360"':inchProperty(key)?inchInputLimits(key):''} ${mode !== 'edit' ? 'disabled' : ''} />${help ? `<small>${help}</small>` : ''}</label>`;
 const dropdown = (label: string, key: string, value: string, options: [
     string,
     string
 ][]) => `<label class="field"><span>${label}</span><select data-field="${key}" ${mode !== 'edit' ? 'disabled' : ''}>${options.map(([v, t]) => `<option value="${esc(v)}" ${v === value ? 'selected' : ''}>${esc(t)}</option>`).join('')}</select></label>`;
+const typeField=(path:string,types:string[])=>{const all=pieceTypesFor(doc),options:[string,string][]=all.map(p=>[p.id,p.name]);if(all.length>1)options.unshift([all.map(p=>p.id).join(','),all.map(p=>p.name).join(' + ')]);return dropdown('Accepted game pieces',path,types.join(','),options);};
 const section = (name: string, content: string) => `<section class="inspector-section"><h3>${name}</h3>${content}</section>`;
-const vectorFields = (label: string, key: string, value: Vec3) => `<div class="vector-label">${label}</div><div class="three-fields">${value.map((n, i) => field(['X', 'Y', 'Z'][i], `${key}.${i}`, n)).join('')}</div>`;
+const vectorFields = (label: string, key: string, value: Vec3) => `<div class="vector-label">${label}</div><div class="three-fields">${value.map((n, i) => field(['X', 'Y', 'Z'][i], `${key}.${i}`, n).replace('class="field"','class="field axis-field"')).join('')}</div>`;
 function renderInspector() {
     const sub = doc.subsystems.find(s => s.id === selected), surface = doc.surfaces.find(s => s.id === selected), edge = doc.edges.find(e => e.id === selected);
+    if(sub){stateOwner=sub.id;if(!(sub.id in openStates))openStates[sub.id]=sub.states!.find(s=>s.isDefault)!.id;}
+    const contextSub=sub ?? (surface?doc.subsystems.find(s=>s.id===surface.owner):edge?doc.subsystems.find(s=>s.id===surfaceForEdge(doc,edge)?.owner):undefined);
+    const heading=$('.properties-heading');
+    heading.innerHTML=contextSub?`<input id="inspector-name" aria-label="Subsystem name" type="text" maxlength="100" value="${esc(contextSub.name)}" ${mode!=='edit'?'disabled':''}/>`:`<span>${edge?'Transition':'Robot'}</span>`;
+    const nameInput=heading.querySelector<HTMLInputElement>('#inspector-name');
+    nameInput?.addEventListener('change',()=>{
+        const name=nameInput.value.trim();if(!name){toast('Subsystem name is required.');nameInput.value=contextSub!.name;return;}
+        if(name!==contextSub!.name)commit(d=>{d.subsystems.find(s=>s.id===contextSub!.id)!.name=name;});
+    });
+    nameInput?.addEventListener('keydown',event=>{if(event.key==='Enter'){event.preventDefault();nameInput.blur();}if(event.key==='Escape'){nameInput.value=contextSub!.name;nameInput.blur();}});
     let html = '';
     if (mode !== 'edit')
         html += '<div class="read-only-note">Design locked during run. Return to Edit to make changes.</div>';
-    if (sub) {
-        html += section('Subsystem', field('Name', 'sub.name', sub.name, 'text') + `<div class="object-description">Rectangular functional abstraction. +X forward · +Y left · +Z up.</div>`);
-        html += section('Geometry', vectorFields('Position · in', 'sub.position', sub.position) + vectorFields('Dimensions · in', 'sub.size', sub.size) + field('Yaw · degrees', 'sub.yaw', sub.yaw));
-        html += section('Storage & collision', field('Total capacity · pieces', 'sub.capacity', sub.capacity, 'number', '1') + `<label class="check-field"><input data-field="sub.solid" type="checkbox" ${sub.solid ? 'checked' : ''} ${mode !== 'edit' ? 'disabled' : ''} /><span>Solid geometry</span></label><p class="help-text">${sub.solid ? 'This box collides with physical pieces and field objects.' : 'Functional envelope: action faces interact, but the box has no solid collider.'} Staging and transit count toward capacity.</p>`);
-        const assignments = doc.surfaces.filter(s => s.owner === sub.id);
-        html += section('Action surfaces', dropdown('Selected face', 'face', selectedFace, FACES.map(f => [f, f])) + `<div class="face-assignment">${assignments.find(s => s.faces.includes(selectedFace)) ? `Assigned: ${esc(assignments.find(s => s.faces.includes(selectedFace))!.name)}` : 'Unassigned · white'}</div><div class="two-buttons">${button('surface:intake', '＋ Intake', 'secondary')}${button('surface:outtake', '＋ Outtake', 'secondary')}</div>${assignments.length ? `<p class="help-text">Select a surface in the hierarchy to group faces and configure its launch settings.</p>` : ''}`);
-        html += section('Subsystem actions', `<div class="two-buttons">${button('duplicate', 'Duplicate', 'secondary')}${button('delete', 'Remove', 'danger')}</div>`);
+    if(inspectorScope==='field') {
+        html+=fieldInspector(doc,selected,{field,vector:vectorFields,section,dropdown,types:typeField,button});
+        const goal=doc.field!.scoringElements.find(g=>g.id===selected||g.surfaces.some(s=>s.id===selected)),source=doc.field!.sources.find(g=>g.id===selected),context=goal ?? source;
+        heading.innerHTML=context?`<input id="inspector-name" aria-label="Field element name" value="${esc(context.name)}" maxlength="100" ${mode!=='edit'?'disabled':''}/>`:'<span>Field</span>';
+        const fieldName=heading.querySelector<HTMLInputElement>('input');fieldName?.addEventListener('change',()=>{const name=fieldName.value.trim();if(!name){toast('A field element name is required.');fieldName.value=context!.name;return;}commit(d=>{(d.field!.scoringElements.find(g=>g.id===context!.id) ?? d.field!.sources.find(g=>g.id===context!.id))!.name=name;});});fieldName?.addEventListener('keydown',event=>{if(event.key==='Enter'){event.preventDefault();fieldName.blur();}if(event.key==='Escape'){fieldName.value=context!.name;fieldName.blur();}});
+    }
+    else if (sub && stateEdgeSelection) {
+        const edge=sub.stateTransitions!.find(e=>e.id===stateEdgeSelection);
+        if(edge)html+=section('State transition',`<div class="route-card">${esc(sub.states!.find(s=>s.id===edge.source)?.name)} → ${esc(sub.states!.find(s=>s.id===edge.target)?.name)}</div>`+bindingField('stateEdge.key',edge.key)+dropdown('Trigger','stateEdge.trigger',edge.trigger,TRIGGER_OPTIONS)+field('Transition time · s','stateEdge.duration',edge.duration)+button('delete-state-edge','Remove transition','danger wide'));
+    }
+    else if (sub) {
+        html+=section('Targeting',dropdown('Targeting Mode','sub.targetingMode',sub.targetingMode ?? 'manual',TARGETING_OPTIONS)+(isTurretMode(sub.targetingMode)?field('Degrees of freedom · degrees','sub.targetingFreedom',sub.targetingFreedom ?? DEFAULT_TARGETING_FREEDOM,'number','1','Total rotation range, split equally around startup yaw.'):''));
+        html+=`<div class="states-list">${sub.states!.map(state=>{
+            const open=openStates[sub.id]===state.id;
+            return `<section class="state-section"><button class="state-toggle" data-action="toggle-state:${esc(state.id)}" aria-expanded="${open}"><span>${open?'▾':'▸'} ${esc(state.name)}</span>${state.isDefault?'<small>Default</small>':''}</button>${open?`<div class="state-properties"><label class="check-field"><input type="checkbox" data-default-state="${esc(state.id)}" ${state.isDefault?'checked':''} ${mode!=='edit'?'disabled':''}/><span>Is default state</span></label>${field('State name','state.name',state.name,'text')}${vectorFields('Position · in','state.position',state.position)}${vectorFields('Dimensions · in','state.size',state.size)}${field('Yaw · degrees','state.yaw',state.yaw)}${field('Pitch · degrees','state.pitch',state.pitch)}${field('Roll · degrees','state.roll',state.roll)}${field('Total capacity · pieces','state.capacity',state.capacity,'number','1')}<label class="check-field"><input data-field="state.ignoreCollision" type="checkbox" ${state.ignoreCollision?'checked':''} ${mode!=='edit'?'disabled':''}/><span>Ignore collision</span></label><h3>Action surfaces</h3><p class="help-text">Drag and drop to target surface</p><div class="two-buttons"><button class="secondary" type="button" data-drag-action="intake" ${activeView!=='edit'||mode!=='edit'?'disabled':''}>＋ Intake</button><button class="secondary" type="button" data-drag-action="outtake" ${activeView!=='edit'||mode!=='edit'?'disabled':''}>＋ Outtake</button></div>${doc.surfaces.filter(a=>a.owner===sub.id&&a.stateId===state.id).map(a=>`<button class="state-action-row" data-select="${esc(a.id)}">${esc(a.name)} · ${a.type}</button>`).join('')}${button('remove-state:'+state.id,'Remove state','danger wide')}</div>`:''}</section>`;
+        }).join('')}</div>${button('add-state','＋ Add state','secondary wide add-state')}`;
+        html+=section('Subsystem actions',`<div class="two-buttons">${button('duplicate','Duplicate','secondary')}${button('delete','Remove','danger')}</div>`);
     }
     else if (surface) {
-        html += section('Action surface', field('Name', 'surface.name', surface.name, 'text') + dropdown('Type', 'surface.type', surface.type, [['intake', 'Intake · blue'], ['outtake', 'Outtake · red']]) + `<p class="help-text">Owner: ${esc(nodeName(doc, surface.owner))}</p>`);
-        html += section('Face group', `<div class="face-grid">${FACES.map(f => { const taken = doc.surfaces.some(s => s.id !== surface.id && s.owner === surface.owner && s.faces.includes(f)); return `<label class="face-check ${taken ? 'unavailable' : ''}"><input type="checkbox" data-face="${f}" ${surface.faces.includes(f) ? 'checked' : ''} ${taken || mode !== 'edit' ? 'disabled' : ''}/>${f}</label>`; }).join('')}</div><p class="help-text">Faces share one action state. Each face can belong to only one group.</p>`);
-        html += section('Action rate', field('Minimum interval · s', 'surface.interval', surface.interval) + button('edit-transition:' + doc.edges.find(e => surfaceForEdge(doc, e)?.id === surface.id)!.id, 'Edit transition', 'secondary wide'));
+        html += section('Action surface', field('Name', 'surface.name', surface.name, 'text') + typeField('surface.accepts',acceptedTypes(doc,surface)) + dropdown('Type', 'surface.type', surface.type, [['intake', 'Intake · blue'], ['outtake', 'Outtake · red']]) + `<p class="help-text">Owner: ${esc(nodeName(doc, surface.owner))}</p>`);
+        html += section('Face group', `<div class="face-grid">${FACES.map(f => { const taken = doc.surfaces.some(s => s.id !== surface.id && s.owner === surface.owner && s.stateId===surface.stateId && s.faces.includes(f)); return `<label class="face-check ${taken ? 'unavailable' : ''}"><input type="checkbox" data-face="${f}" ${surface.faces.includes(f) ? 'checked' : ''} ${taken || mode !== 'edit' ? 'disabled' : ''}/>${f}</label>`; }).join('')}</div><p class="help-text">Faces share one action state. Each face can belong to only one group.</p>`);
+        html += section('Action rate', field('Minimum interval · s', 'surface.interval', surface.interval) + doc.edges.filter(e=>surfaceForEdge(doc,e)?.id===surface.id).map(e=>button('edit-transition:'+e.id,(pieceTypesFor(doc).find(p=>p.id===e.pieceType)?.name ?? '')+' transition','secondary wide')).join(''));
         if (surface.type === 'outtake')
-            html += section('Launch configuration', dropdown('Release face', 'releaseFace', surface.faces[0] ?? '+X', surface.faces.map(f => [f, f])) + field('Exit speed · in/s', 'surface.speed', surface.speed) + `<div class="vector-label">Simultaneous game piece outtake</div><div class="two-buttons">${field('Units X · across', 'surface.unitsX', surface.unitsX ?? 1, 'number', '1')}${field('Units Y · up', 'surface.unitsY', surface.unitsY ?? 1, 'number', '1')}</div>` + field('Local yaw · degrees', 'surface.yaw', surface.yaw) + field('Local pitch · degrees', 'surface.pitch', surface.pitch) + vectorFields('Exit angular velocity · deg/s', 'surface.spin', surface.spin) + `<p class="help-text">Yaw/pitch use the subsystem frame (+X at zero). Robot point velocity and angular velocity are added at release. Ball orientation has no aerodynamic effect.</p>`);
+            html += section('Launch configuration', dropdown('Release face', 'releaseFace', surface.faces[0] ?? '+X', surface.faces.map(f => [f, f])) + field('Exit speed · m/s', 'surface.speed', surface.speed) + `<div class="vector-label">Simultaneous game piece outtake</div><div class="two-buttons">${field('Units X · across', 'surface.unitsX', surface.unitsX ?? 1, 'number', '1')}${field('Units Y · up', 'surface.unitsY', surface.unitsY ?? 1, 'number', '1')}</div>` + field('Local yaw · degrees', 'surface.yaw', surface.yaw) + field('Local pitch · degrees', 'surface.pitch', surface.pitch) + vectorFields('Exit angular velocity · deg/s', 'surface.spin', surface.spin) + `<p class="help-text">Yaw/pitch use the subsystem frame (+X at zero). Robot point velocity and angular velocity are added at release. Ball orientation has no aerodynamic effect.</p>`);
         html += section('Surface actions', button('delete', 'Delete action surface', 'danger wide'));
     }
     else if (edge) {
         const action = surfaceForEdge(doc, edge);
         html += section(action ? 'Action transition' : 'Directed transfer', `<div class="route-card"><span>${esc(nodeName(doc, edge.source))}</span><span class="muted">to</span><span>${esc(nodeName(doc, edge.target))}</span></div>` + field('Travel time · s', 'edge.duration', edge.duration) + `<p class="help-text">${edge.duration === 0 ? 'Instant · no delay.' : `Effective: ${ticksFor(edge.duration)} ticks · ${(ticksFor(edge.duration) * DT).toFixed(4)} s at 120 Hz.`}</p>`);
-        html += section('Scheduling', bindingField('edge.key', edge.key) + dropdown('Trigger', 'edge.trigger', edge.trigger, [['hold', 'Hold'], ['press', 'Press']]) + (action ? '' : field('Priority · higher first', 'edge.priority', edge.priority, 'number', '1') + field('Concurrent pieces', 'edge.concurrency', edge.concurrency, 'number', '1')) + `<p class="help-text">Transitions finish after the key is released. Use 0 seconds for instant action transitions. A cross-subsystem transfer reserves its destination slot and keeps source ownership until delivery.</p>`);
+        html += section('Scheduling', (action?'<p class="help-text">'+esc(pieceTypesFor(doc).find(p=>p.id===edge.pieceType)?.name ?? pieceTypesFor(doc)[0].name)+'</p>':dropdown('Game piece','edge.pieceType',edge.pieceType ?? pieceTypesFor(doc)[0].id,pieceTypesFor(doc).map(p=>[p.id,p.name]))) + bindingField('edge.key', edge.key) + dropdown('Trigger', 'edge.trigger', edge.trigger, TRIGGER_OPTIONS) + (action ? '' : field('Priority · higher first', 'edge.priority', edge.priority, 'number', '1') + field('Concurrent pieces', 'edge.concurrency', edge.concurrency, 'number', '1')) + `<p class="help-text">Transitions finish after the key is released. Use 0 seconds for instant action transitions. A cross-subsystem transfer reserves its destination slot and keeps source ownership until delivery.</p>`);
         const metric = snapshot?.edgeMetrics[edge.id];
         if (metric)
             html += section('Last run', `<dl class="metric-list"><dt>Completed deliveries</dt><dd>${metric.deliveries}</dd><dt>Capacity blocked</dt><dd>${(metric.capacityTicks * DT).toFixed(2)} s</dd><dt>Waiting for input</dt><dd>${(metric.inputTicks * DT).toFixed(2)} s</dd><dt>Throughput</dt><dd>${(metric.deliveries / Math.max(DT, snapshot!.tick * DT)).toFixed(2)} /s</dd></dl>`);
@@ -303,17 +391,18 @@ function renderInspector() {
     }
     else if (selected === '@connect') {
         const nodes = doc.subsystems;
-        html += section('New connection', `<form id="connection-form"><label class="field"><span>Source</span><select name="source">${nodes.map(n => `<option value="${esc(n.id)}">${esc(n.name)}</option>`).join('')}</select></label><label class="field"><span>Destination</span><select name="target">${nodes.map(n => `<option value="${esc(n.id)}">${esc(n.name)}</option>`).join('')}</select></label><button class="primary wide" type="submit">Create connection</button></form><p class="help-text">Connect subsystems here or drag between their ports. Action links are automatic.</p>`);
+        html += section('New connection', `<form id="connection-form">${dropdown('Game piece','new.pieceType',pieceTypesFor(doc)[0].id,pieceTypesFor(doc).map(p=>[p.id,p.name])).replace('data-field="new.pieceType"','name="pieceType"')}<label class="field"><span>Source</span><select name="source">${nodes.map(n => `<option value="${esc(n.id)}">${esc(n.name)}</option>`).join('')}</select></label><label class="field"><span>Destination</span><select name="target">${nodes.map(n => `<option value="${esc(n.id)}">${esc(n.name)}</option>`).join('')}</select></label><button class="primary wide" type="submit">Create connection</button></form><p class="help-text">Connect subsystems here or drag between their ports. Action links are automatic.</p>`);
     }
     else {
         const b = doc.basics;
-        html += section('Robot basics', field('Robot name', 'robot.name', doc.name, 'text') + `<div class="robot-meta"><span>Revision ${doc.revision}</span><span>Practice Lab</span></div>`);
+        html += section('Robot basics', field('Robot name', 'robot.name', doc.name, 'text') + `<div class="robot-meta"><span>Revision ${doc.revision}</span><span>${esc(seasonFor(doc.seasonId).title)}</span></div>`);
         html += section('Chassis envelope', field('Length · X · in', 'basics.length', b.length) + field('Width · Y · in', 'basics.width', b.width) + field('Height · Z · in', 'basics.height', b.height) + field('Mass · lb', 'basics.mass', b.mass));
-        html += section('Planar drivetrain', field('Wheel diameter · in', 'basics.wheelDiameter', b.wheelDiameter) + field('Drive reduction', 'basics.reduction', b.reduction, 'number', '.01', 'Motor revolutions per wheel revolution.') + field('Motor free speed · rpm', 'basics.motorRPM', b.motorRPM, 'number', '1') + `<div class="speed-estimate"><small>Theoretical free speed</small><strong>${displayValue('basics.loadedSpeed', freeSpeed(doc)).toFixed(2)} <span>in/s</span></strong></div>` + field('Loaded speed · in/s', 'basics.loadedSpeed', b.loadedSpeed) + field('Acceleration / deceleration · in/s²', 'basics.acceleration', b.acceleration) + field('Max angular speed · deg/s', 'basics.angularSpeed', b.angularSpeed) + `<p class="help-text">Starting estimates. Module positions use the four chassis corners. Angular acceleration is fixed at 343.77 deg/s². This model does not estimate traction, current, battery sag, or tipping.</p>`);
+        html += section('Planar drivetrain', field('Wheel diameter · in', 'basics.wheelDiameter', b.wheelDiameter) + field('Drive reduction', 'basics.reduction', b.reduction, 'number', '.01', 'Motor revolutions per wheel revolution.') + field('Motor free speed · rpm', 'basics.motorRPM', b.motorRPM, 'number', '1') + `<div class="speed-estimate"><small>Theoretical free speed</small><strong>${displayValue('basics.loadedSpeed', freeSpeed(doc)).toFixed(2)} <span>m/s</span></strong></div>` + field('Loaded speed · m/s', 'basics.loadedSpeed', b.loadedSpeed) + field('Acceleration / deceleration · m/s²', 'basics.acceleration', b.acceleration) + field('Max angular speed · deg/s', 'basics.angularSpeed', b.angularSpeed) + `<p class="help-text">Starting estimates. Module positions use the four chassis corners. Angular acceleration is fixed at 343.77 deg/s². This model does not estimate traction, current, battery sag, or tipping.</p>`);
     }
     $('#inspector').innerHTML = html;
     $('#inspector').querySelectorAll<HTMLInputElement | HTMLSelectElement>('[data-field]').forEach(el => el.addEventListener('change', () => {
         const path = el.dataset.field!;
+        if(path==='scoreSurface.name'&&!el.value.trim()){toast('A scoring surface name is required.');renderInspector();return;}
         if (path === 'face') {
             selectedFace = el.value as Face;
             renderInspector();
@@ -325,9 +414,20 @@ function renderInspector() {
             renderInspector();
             return;
         }
+        if(path.endsWith('.accepts'))value=String(value).split(',');
+        if(path==='source.enabled')value=value==='true';
         if (path.endsWith('.key'))
             value = normalizeBinding(String(value)) ?? '';
-        if (typeof value === 'number') value = storedValue(path, value);
+        if (typeof value === 'number') {
+            const typed=value;value=storedValue(path,value);
+            if(path.startsWith('bounce.'))value=Math.max(0,Math.min(1,value as number));
+            if(path==='goal.points')value=Math.round(Math.max(0,Math.min(1000,value as number)));
+            if(path==='goal.capacity')value=Math.round(Math.max(1,Math.min(1000,value as number)));
+            if(path==='source.cooldown')value=Math.max(.1,Math.min(300,value as number));
+            if(path.startsWith('source.velocity.'))value=Math.max(-20,Math.min(20,value as number));
+            if(path==='sub.targetingFreedom')value=Math.max(0,Math.min(2*Math.PI,value as number));
+            if(inchProperty(path)&&Math.abs(displayValue(path,value as number)-typed)>1e-7)toast(`Rounded to ${displayValue(path,value as number)} in · 0.5-inch grid.`);
+        }
         commit(d => {
             if (path === 'releaseFace') {
                 const s = d.surfaces.find(s => s.id === selected)!;
@@ -335,16 +435,25 @@ function renderInspector() {
                 return;
             }
             const [kind, ...parts] = path.split('.');
-            let target: any = kind === 'robot' ? d : kind === 'basics' ? d.basics : kind === 'sub' ? d.subsystems.find(s => s.id === selected) : kind === 'surface' ? d.surfaces.find(s => s.id === selected) : d.edges.find(e => e.id === selected);
+            let target: any = kind==='bounce'?d.field!.bounciness:kind==='goal'?d.field!.scoringElements.find(g=>g.id===selected):kind==='source'?d.field!.sources.find(g=>g.id===selected):kind==='scoreSurface'?d.field!.scoringElements.flatMap(g=>g.surfaces).find(s=>s.id===selected):kind === 'robot' ? d : kind === 'basics' ? d.basics : kind === 'sub' ? d.subsystems.find(s => s.id === selected) : kind === 'surface' ? d.surfaces.find(s => s.id === selected) : kind === 'state' ? currentState(d.subsystems.find(s=>s.id===selected)!) : kind === 'stateEdge' ? d.subsystems.find(s=>s.id===selected)!.stateTransitions!.find(e=>e.id===stateEdgeSelection) : d.edges.find(e => e.id === selected);
             for (const p of parts.slice(0, -1))
                 target = target[p];
             target[parts.at(-1)!] = value;
+            if(kind==='goal'&&parts[0]==='accepts')for(const surface of target.surfaces){surface.accepts=surface.accepts.filter((t:string)=>target.accepts.includes(t));if(!surface.accepts.length)surface.accepts=[target.accepts[0]];}
         });
     }));
     $('#inspector').querySelectorAll<HTMLInputElement>('[data-face]').forEach(el => el.addEventListener('change', () => commit(d => { const s = d.surfaces.find(s => s.id === selected)!, f = el.dataset.face as Face; s.faces = el.checked ? [...s.faces, f] : s.faces.filter(a => a !== f); })));
-    $('#connection-form')?.addEventListener('submit', e => { e.preventDefault(); const form = new FormData(e.target as HTMLFormElement); addConnection(String(form.get('source')), String(form.get('target'))); });
+    $('#inspector').querySelectorAll<HTMLInputElement>('[data-score-face]').forEach(el=>el.addEventListener('change',()=>commit(d=>{const goal=d.field!.scoringElements.find(g=>g.surfaces.some(s=>s.id===selected))!,surface=goal.surfaces.find(s=>s.id===selected)!,face=el.dataset.scoreFace as Face;if(!el.checked&&surface.faces.length===1){toast('A scoring surface must have at least one face.');return;}if(el.checked&&goal.surfaces.some(s=>s.id!==selected&&s.faces.includes(face))){toast('That face already has a scoring surface.');return;}surface.faces=el.checked?[...surface.faces,face]:surface.faces.filter(f=>f!==face);})));
+    $('#inspector').querySelectorAll<HTMLInputElement>('[data-default-state]').forEach(el=>el.addEventListener('change',()=>{
+        const sub=doc.subsystems.find(s=>s.id===selected)!;
+        if(!el.checked){toast('A subsystem must have a default state. Choose another default before removing this one.');renderInspector();return;}
+        const before=sub.states!.find(s=>s.isDefault)!;
+        commit(d=>{for(const state of d.subsystems.find(s=>s.id===selected)!.states!)state.isDefault=state.id===el.dataset.defaultState;});
+        toast(`Default changed from ${before.name}. This replaces the previous default; it does not add another.`);
+    }));
+    $('#connection-form')?.addEventListener('submit', e => { e.preventDefault(); const form = new FormData(e.target as HTMLFormElement); addConnection(String(form.get('source')),String(form.get('target')),String(form.get('pieceType'))); });
 }
-function addConnection(source: string, target: string) {
+function addConnection(source:string,target:string,pieceType=pieceTypesFor(doc)[0].id) {
     if (doc.surfaces.some(s => s.id === source || s.id === target)) {
         toast('Action links are permanent. Select the transition to change its binding or time.');
         return;
@@ -353,11 +462,11 @@ function addConnection(source: string, target: string) {
         toast('That connection is unsupported. Connect intake → owner, subsystem → subsystem, or owner → outtake.');
         return;
     }
-    if (doc.edges.some(e => e.source === source && e.target === target)) {
+    if (doc.edges.some(e => e.source===source&&e.target===target&&(e.pieceType ?? pieceTypesFor(doc)[0].id)===pieceType)) {
         toast('That route already exists. Select it to edit.');
         return;
     }
-    commit(d => { const e = { id: id(), source, target, duration: .25, key: 'j', trigger: 'hold' as const, priority: 0, concurrency: 1 }; d.edges.push(e); selected = e.id; });
+    commit(d => { const e = { id: id(), source, target,pieceType,duration: .25, key: 'j', trigger: 'hold' as const, priority: 0, concurrency: 1 }; d.edges.push(e); selected = e.id; });
 }
 function updateRuntime() {
     const s = snapshot;
@@ -367,16 +476,16 @@ function updateRuntime() {
     $('#runtime-status').classList.toggle('warning-text', !!s?.blocked.length || !!s?.slow);
 }
 function showValidation() { const issues = validate(doc); modal(modalHead('Design check', 'Validation & model scope') + `<div class="modal-body"><div class="notice">Fix errors before driving. Model notes describe the limits of this offline prototype.</div><div class="issue-list">${issues.map(i => `<button class="issue ${i.level}" data-issue="${esc(i.object)}"><span>${i.level === 'error' ? '⚠' : 'ⓘ'}</span><div><strong>${i.level === 'error' ? 'Fix required' : 'Model note'}</strong><p>${esc(displayIssue(i.message))}</p></div></button>`).join('')}</div></div>`); }
-function showLocalLibrary() { const robots = readRobots(); modal(modalHead('Local workspace', 'Your robot library') + `<div class="modal-body"><div class="library-toolbar"><label class="field"><span>Season</span><select aria-label="Season"><option>Practice Lab · spherical ball fixture</option></select></label>${button('new', '＋ New robot', 'primary')}</div><p class="help-text">Saved in this browser on this local address. Offline mode does not use Google sign-in or a shared team library.</p><div class="library-grid"><button class="robot-card sample-card" data-action="sample"><span class="card-overline">Guided sample</span><span class="card-robot">▧</span><h3>Atlas prototype</h3><p>Collector, hopper, launcher.<br>A complete pipeline to explore.</p><span class="card-footer">Open a fresh sample</span></button>${robots.map(r => `<article class="robot-card"><span class="card-overline">Local robot · rev ${r.document.revision}</span><span class="card-robot">▧</span><h3>${esc(r.document.name)}</h3><p>${r.document.subsystems.length} subsystems · ${r.document.edges.length} connections<br>${esc(new Date(r.updated).toLocaleString())}</p><div class="card-footer">${button('open:' + r.document.id, 'Open', 'secondary')}${button('copy:' + r.document.id, 'Duplicate', 'text-button')}</div></article>`).join('')}</div></div>`); }
+function showLocalLibrary() { const robots=readRobots().filter(r=>r.document.seasonId===librarySeason); modal(modalHead('Local workspace', 'Your robot library') + `<div class="modal-body"><div class="library-toolbar"><label class="field"><span>Season</span><select id="new-season" aria-label="Season">${seasons.map(s=>`<option value="${s.id}" ${s.id===librarySeason?'selected':''}>${esc(s.title)}</option>`).join('')}</select></label>${button('new', '＋ New robot', 'primary')}</div><p class="help-text">Saved in this browser on this local address. Offline mode does not use Google sign-in or a shared team library.</p><div class="library-grid"><button class="robot-card sample-card" data-action="sample"><span class="card-overline">Guided sample</span><span class="card-robot">▧</span><h3>${librarySeason==='reefscape-2025'?'REEFSCAPE prototype':'Atlas prototype'}</h3><p>Collector, hopper, launcher.<br>A complete pipeline to explore.</p><span class="card-footer">Open a fresh sample</span></button>${robots.map(r => `<article class="robot-card"><span class="card-overline">Local robot · rev ${r.document.revision}</span><span class="card-robot">▧</span><h3>${esc(r.document.name)}</h3><p>${r.document.subsystems.length} subsystems · ${r.document.edges.length} connections<br>${esc(new Date(r.updated).toLocaleString())}</p><div class="card-footer">${button('open:' + r.document.id, 'Open', 'secondary')}${button('copy:' + r.document.id, 'Duplicate', 'text-button')}</div></article>`).join('')}</div></div>`); }
 let cloudRows: RobotSummary[] = [], libraryCursor: string|undefined;
 async function showLibrary(more = false) {
     if (!cloudEnabled()) { showLocalLibrary(); return; }
     modal(modalHead('Team workspace', 'Robot library') + '<div class="modal-body">Loading…</div>');
     try {
-        const page = await cloudLibrary(more ? libraryCursor : undefined);
+        const page = await cloudLibrary(more ? libraryCursor : undefined,librarySeason);
         cloudRows = more ? [...cloudRows, ...page.items] : page.items;
         libraryCursor = page.cursor;
-        modal(modalHead('Team workspace', 'Robot library') + `<div class="modal-body"><div class="library-toolbar">${button('new', '＋ New robot', 'primary')}${button('sample', 'Guided sample', 'secondary')}</div><div class="library-grid">${cloudRows.map(r => `<article class="robot-card"><span class="card-overline">Shared · rev ${r.revision}</span><h3>${esc(r.name)}</h3><p>${r.subsystems} subsystems · ${r.connections} connections<br>${esc(new Date(r.updated).toLocaleString())}</p><div class="card-footer">${button('open:' + r.id, 'Open', 'secondary')}${button('copy:' + r.id, 'Duplicate', 'text-button')}</div></article>`).join('')}</div>${libraryCursor ? button('library-more', 'Load more', 'secondary') : ''}${!cloudRows.length ? '<p>No shared robots yet. Create a robot and save it.</p>' : ''}</div>`);
+        modal(modalHead('Team workspace', 'Robot library') + `<div class="modal-body"><div class="library-toolbar"><label class="field"><span>Season</span><select id="new-season">${seasons.map(s=>`<option value="${s.id}" ${s.id===librarySeason?'selected':''}>${esc(s.title)}</option>`).join('')}</select></label>${button('new', '＋ New robot', 'primary')}${button('sample', 'Guided sample', 'secondary')}</div><div class="library-grid">${cloudRows.map(r => `<article class="robot-card"><span class="card-overline">Shared · rev ${r.revision}</span><h3>${esc(r.name)}</h3><p>${r.subsystems} subsystems · ${r.connections} connections<br>${esc(new Date(r.updated).toLocaleString())}</p><div class="card-footer">${button('open:' + r.id, 'Open', 'secondary')}${button('copy:' + r.id, 'Duplicate', 'text-button')}</div></article>`).join('')}</div>${libraryCursor ? button('library-more', 'Load more', 'secondary') : ''}${!cloudRows.length ? '<p>No shared robots yet. Create a robot and save it.</p>' : ''}</div>`);
     } catch (e) {modal(modalHead('Team workspace', 'Robot library') + `<div class="modal-body"><p>${esc(e instanceof Error ? e.message : 'Unable to load robots.')}</p>${button('library', 'Retry', 'secondary')}</div>`);}
 }
 function rememberRevision(document: RobotDocument) {
@@ -387,13 +496,13 @@ const average = (values: number[]) => values.length ? values.reduce((a, b) => a 
 function currentRun(): SavedRun | undefined {
     if (!snapshot || snapshot.tick === 0 || !runDocument)
         return;
-    return { id: activeRunId, name: runDocument.name, created: new Date().toISOString(), document: clone(runDocument), snapshot: clone(snapshot), replay: isReplay, engine: ENGINE_VERSION, season: practice.version };
+    return { id: activeRunId, name: runDocument.name, created: new Date().toISOString(), document: clone(runDocument), snapshot: clone(snapshot), replay: isReplay, engine: ENGINE_VERSION, season: seasonFor(runDocument.seasonId).version };
 }
-function resultCard(run: SavedRun) { const s = run.snapshot, seconds = s.tick * DT; return `<div class="result-card"><div class="eyebrow">${run.replay ? 'RECORDED INPUT RE-SIMULATION' : 'MANUAL · DRIVER-DEPENDENT'}</div><h3>${esc(run.name)}</h3><p class="help-text">Robot rev ${run.document.revision} · ${seconds.toFixed(2)} s</p><div class="result-metrics"><div><span>Practice score</span><strong>${s.score}</strong></div><div><span>Pickups</span><strong>${s.pickups}</strong></div><div><span>Releases</span><strong>${s.releases}</strong></div><div><span>Scored / released</span><strong>${s.scored} / ${s.releases}</strong></div><div><span>Mean intake-to-release</span><strong>${s.cycles.length ? average(s.cycles).toFixed(2) + ' s' : '—'}</strong></div><div><span>Release throughput</span><strong>${(s.releases / Math.max(seconds, DT)).toFixed(2)} /s</strong></div></div><p class="help-text">${s.releases - s.scored} unscored or unresolved releases. Only descending crossings of the target opening score.</p><p class="result-version">Engine ${esc(run.engine)} · Rapier 0.19.3 · Practice ${esc(run.season)} · Experimental fixture</p></div>`; }
+function resultCard(run: SavedRun) { const s = run.snapshot, seconds = s.tick * DT; return `<div class="result-card"><div class="eyebrow">${run.replay ? 'RECORDED INPUT RE-SIMULATION' : 'MANUAL · DRIVER-DEPENDENT'}</div><h3>${esc(run.name)}</h3><p class="help-text">Robot rev ${run.document.revision} · ${seconds.toFixed(2)} s</p><div class="result-metrics"><div><span>Score</span><strong>${s.score}</strong></div><div><span>Pickups</span><strong>${s.pickups}</strong></div><div><span>Releases</span><strong>${s.releases}</strong></div><div><span>Scored / released</span><strong>${s.scored} / ${s.releases}</strong></div><div><span>Mean intake-to-release</span><strong>${s.cycles.length ? average(s.cycles).toFixed(2) + ' s' : '—'}</strong></div><div><span>Release throughput</span><strong>${(s.releases / Math.max(seconds, DT)).toFixed(2)} /s</strong></div></div><p class="help-text">${s.scored} pieces stored in scoring elements. Each accepted piece scores once on contact.</p><p class="result-version">Engine ${esc(run.engine)} · Rapier 0.21.0 · Practice ${esc(run.season)} · Experimental fixture</p></div>`; }
 function showResults() {
     const current = currentRun(), saved = readRuns();
     const runs = current ? [current, ...saved.filter(r => r.id !== current.id)] : saved;
-    modal(modalHead('Engineering outputs', 'Run results') + `<div class="modal-body results-body">${runs.length ? `<div class="results-toolbar">${button('save-run', 'Save current run', 'primary')}${button('csv', 'Export metrics CSV', 'secondary')}${button('run-json', 'Export run JSON', 'secondary')}</div><div class="comparison-selectors"><label class="field"><span>Run A</span><select id="compare-a">${runs.map((r, i) => `<option value="${i}">${i === 0 && current ? 'Current · ' : ''}${esc(r.name)} · rev ${r.document.revision} · ${(r.snapshot.tick * DT).toFixed(1)} s</option>`).join('')}</select></label><label class="field"><span>Run B</span><select id="compare-b"><option value="-1">Select a saved run to compare</option>${runs.map((r, i) => `<option value="${i}">${esc(r.name)} · rev ${r.document.revision} · ${(r.snapshot.tick * DT).toFixed(1)} s</option>`).join('')}</select></label></div><div id="comparison" class="comparison"></div><div id="edge-results"></div><div class="results-toolbar">${button('replay', 'Re-run recorded inputs from A', 'secondary')}</div><div class="notice">All runs use the same fixed practice setup. Manual runs depend on the driver. Re-simulation uses the original robot snapshot and tick-indexed inputs; repeatability is limited to this tested engine/build. Parameters are estimates. No drag, spin lift, flexible pieces, tipping, official FRC rules, or articulated mechanisms are modeled.</div>` : `<div class="empty-state"><div class="empty-icon">◷</div><h3>Make your first run</h3><p>Open Drive, collect balls, and launch toward the target. Your measurements will appear here.</p>${button('close', 'Back to workspace', 'primary')}</div>`}</div>`);
+    modal(modalHead('Engineering outputs', 'Run results') + `<div class="modal-body results-body">${runs.length ? `<div class="results-toolbar">${button('save-run', 'Save current run', 'primary')}${button('csv', 'Export metrics CSV', 'secondary')}${button('run-json', 'Export run JSON', 'secondary')}</div><div class="comparison-selectors"><label class="field"><span>Run A</span><select id="compare-a">${runs.map((r, i) => `<option value="${i}">${i === 0 && current ? 'Current · ' : ''}${esc(r.name)} · rev ${r.document.revision} · ${(r.snapshot.tick * DT).toFixed(1)} s</option>`).join('')}</select></label><label class="field"><span>Run B</span><select id="compare-b"><option value="-1">Select a saved run to compare</option>${runs.map((r, i) => `<option value="${i}">${esc(r.name)} · rev ${r.document.revision} · ${(r.snapshot.tick * DT).toFixed(1)} s</option>`).join('')}</select></label></div><div id="comparison" class="comparison"></div><div id="edge-results"></div><div class="results-toolbar">${button('replay', 'Re-run recorded inputs from A', 'secondary')}</div><div class="notice">Runs use their saved season and field settings. Manual runs depend on the driver. Re-simulation uses the original robot snapshot and tick-indexed inputs; repeatability is limited to this tested engine/build. Parameters are estimates. No drag, spin lift, flexible pieces, tipping, official FRC rules, or articulated mechanisms are modeled.</div>` : `<div class="empty-state"><div class="empty-icon">◷</div><h3>Make your first run</h3><p>Open Drive, collect balls, and launch toward the target. Your measurements will appear here.</p>${button('close', 'Back to workspace', 'primary')}</div>`}</div>`);
     if (!runs.length)
         return;
     const update = () => {
@@ -413,6 +522,7 @@ function showResults() {
 function exportCSV(run: SavedRun) { download('polysim-metrics.csv', metricsCSV(run), 'text/csv'); }
 function help() { modal(modalHead('HELP', 'PolySim') + `<div class="modal-body help-body"><div class="help-steps"><div><h3>Edit</h3><p>Select a box and drag its Move or Resize handles. The right inspector contains dimensions, capacity, faces and bindings. Hide expands the editor; Inspector restores the pane.</p></div><div><h3>Graph</h3><p>Drag from an output port onto a destination. Select any module or connection to edit it in the right inspector.</p></div><div><h3>Drive</h3><p>Choose driver station 1, 2 or 3. The camera stays behind the station and smoothly tracks the robot. WASD moves; left/right arrows rotate. Opening Drive starts play automatically. Leaving Drive pauses play.</p></div></div><p>Click a key binding, then press the desired key. Space, Shift and Enter are supported. Yellow fills each box from the bottom according to owned inventory and capacity.</p><p>Save keeps robots in this browser. Export creates a JSON backup.</p><details class="event-details"><summary>Model limits</summary><p>Estimated practice fixture. No official FRC rules, drag, traction, tipping, articulated mechanisms or cloud sharing. Full assumptions appear in Results and the offline documentation.</p></details>${button('close', 'Close', 'primary')}</div>`); }
 function removeSelected() {
+    if(inspectorScope==='field'){$('#inspector').querySelector<HTMLButtonElement>('[data-action="field:delete"]')?.click();return;}
     const edge = doc.edges.find(e => e.id === selected);
     if (edge && surfaceForEdge(doc, edge)) { toast('This link belongs to its surface action and cannot be removed.'); return; }
     const sub = doc.subsystems.find(s => s.id === selected), surface = doc.surfaces.find(s => s.id === selected), ids = new Set([selected]);
@@ -467,10 +577,32 @@ document.addEventListener('click', async e => {
     if (!target || target.disabled)
         return;
     const action = target.dataset.action!;
+    if(action.startsWith('scope:')){inspectorScope=action==='scope:field'?'field':'robot';selected=doc.id;if(activeView!=='edit')setWorkspaceView('edit');render();return;}
+    if(action.startsWith('field:') || action==='add'&&inspectorScope==='field'){
+        if(mode!=='edit'){toast('Return to Edit to change the field.');return;}
+        if(action==='field:add-goal'||action==='add'){commit(d=>{const goal={id:id(),name:'Scoring element',position:[seasonFor(d.seasonId).start[0],1.5,.5] as Vec3,size:[.3048,.3048,.3048] as Vec3,yaw:0,pitch:0,roll:0,points:1,capacity:1,accepts:pieceTypesFor(d).map(p=>p.id),surfaces:[]};d.field!.scoringElements.push(goal);selected=goal.id;});return;}
+        if(action==='field:add-source'){commit(d=>{const source={id:id(),name:'Human-player release',position:[seasonFor(d.seasonId).start[0],1.5,1] as Vec3,velocity:[0,0,-1] as Vec3,pieceType:pieceTypesFor(d)[0].id,enabled:true,mode:'proximity' as const,proximity:1.5,cooldown:1.5};d.field!.sources.push(source);selected=source.id;});return;}
+        if(action==='field:delete'){commit(d=>{const parent=d.field!.scoringElements.find(g=>g.surfaces.some(s=>s.id===selected));if(parent){parent.surfaces=parent.surfaces.filter(s=>s.id!==selected);selected=parent.id;}else{d.field!.scoringElements=d.field!.scoringElements.filter(g=>g.id!==selected);d.field!.sources=d.field!.sources.filter(g=>g.id!==selected);selected=d.id;}});return;}
+    }
+
     if (action === 'close') {
         close();
         return;
     }
+    if(action==='restart-drive'){if(activeView==='drive'){keys.clear();virtual.clear();start();}return;}
+    if(action.startsWith('graph-mode:')){graphMode=action.slice(11) as 'travel'|'states';stateEdgeSelection='';if(!stateOwner)stateOwner=doc.subsystems[0]?.id??'';render();graph.fit();return;}
+    if(action.startsWith('toggle-state:')){const sid=action.slice(13),sub=doc.subsystems.find(s=>s.states!.some(t=>t.id===sid))!;openStates[sub.id]=openStates[sub.id]===sid?undefined:sid;selected=sub.id;stateOwner=sub.id;stateEdgeSelection='';render();return;}
+    if(action==='add-state'){
+        const sub=doc.subsystems.find(s=>s.id===selected)||doc.subsystems.find(s=>s.id===stateOwner);if(!sub)return;
+        if(sub.states!.length>=20){toast('A subsystem can have at most 20 states.');return;}
+        commit(d=>{const owner=d.subsystems.find(s=>s.id===sub.id)!;const state=addState(d,owner,currentState(owner));openStates[owner.id]=state.id;selected=owner.id;stateOwner=owner.id;stateEdgeSelection='';});graph.fit();return;
+    }
+    if(action.startsWith('remove-state:')){
+        const sub=doc.subsystems.find(s=>s.id===selected)!,sid=action.slice(13),state=sub.states!.find(t=>t.id===sid)!;
+        if(state.isDefault){toast('A subsystem must have a default state. Set another state as default before removing this one.');return;}
+        commit(d=>{const owner=d.subsystems.find(s=>s.id===selected)!;owner.states=owner.states!.filter(t=>t.id!==sid);owner.stateTransitions=owner.stateTransitions!.filter(e=>e.source!==sid&&e.target!==sid);delete owner.stateLayout![sid];const ids=new Set(d.surfaces.filter(a=>a.owner===owner.id&&a.stateId===sid).map(a=>a.id));d.surfaces=d.surfaces.filter(a=>!ids.has(a.id));d.edges=d.edges.filter(e=>!ids.has(e.source)&&!ids.has(e.target));for(const id of ids)delete d.layout[id];openStates[owner.id]=owner.states!.find(t=>t.isDefault)!.id;});return;
+    }
+    if(action==='delete-state-edge'){commit(d=>{const sub=d.subsystems.find(s=>s.id===selected)!;sub.stateTransitions=sub.stateTransitions!.filter(e=>e.id!==stateEdgeSelection);stateEdgeSelection='';});return;}
     if (action.startsWith('edit-transition:')) { select(action.slice(16)); return; }
     if (action === 'signout') {
         try {await signOut();} catch {toast('Unable to sign out. Check your connection and retry.');}
@@ -524,8 +656,13 @@ document.addEventListener('click', async e => {
         render();
         return;
     }
+    if(action==='add-graph'&&graphMode==='states'){
+        const sub=doc.subsystems.find(s=>s.id===stateOwner);if(!sub)return;
+        if(sub.states!.length>=20){toast('A subsystem can have at most 20 states.');return;}
+        commit(d=>{const owner=d.subsystems.find(s=>s.id===sub.id)!;const state=addState(d,owner,currentState(owner));openStates[owner.id]=state.id;selected=owner.id;stateEdgeSelection='';});graph.fit();return;
+    }
     if (action === 'add' || action === 'add-graph') {
-        commit(d => { const s = { id: id(), name: 'New subsystem', position: [0, 0, .5] as Vec3, size: [.35, .35, .35] as Vec3, yaw: 0, capacity: 1, solid: false }; d.subsystems.push(s); d.layout[s.id] = nextNodePosition(d); selected = s.id; });
+        commit(d => { const s = { id: id(), name: 'New subsystem', position: [0, 0, .5] as Vec3, size: [.35, .35, .35] as Vec3, yaw: 0, capacity: 1, solid: true }; d.subsystems.push(s); d.layout[s.id] = nextNodePosition(d); selected = s.id; });
         requestAnimationFrame(() => graph.fit());
         return;
     }
@@ -537,7 +674,7 @@ document.addEventListener('click', async e => {
             toast('That face already belongs to a surface. Edit the existing group first.');
             return;
         }
-        commit(d => { const type = action.split(':')[1] as Surface['type']; const s = createAction(sub, type, selectedFace); d.surfaces.push(s); d.layout[s.id] = nextNodePosition(d); selected = s.id; });
+        commit(d => { const type = action.split(':')[1] as Surface['type']; const s = {...createAction(sub, type, selectedFace),stateId:currentState(sub).id}; d.surfaces.push(s); d.layout[s.id] = nextNodePosition(d); selected = s.id; });
         return;
     }
     if (action === 'delete') {
@@ -548,16 +685,18 @@ document.addEventListener('click', async e => {
         const original = doc.subsystems.find(s => s.id === selected);
         if (!original)
             return;
-        commit(d => { const s = clone(original); s.id = id(); s.name += ' copy'; s.position[1] += .4; d.subsystems.push(s); d.layout[s.id] = nextNodePosition(d); selected = s.id; });
-        toast('Block duplicated. Assign new action surfaces and connections.');
+        commit(d=>{const sub=duplicateSubsystem(d,original);d.layout[sub.id]=nextNodePosition(d);selected=sub.id;openStates[sub.id]=sub.states!.find(s=>s.isDefault)!.id;});
+        toast('Subsystem and states duplicated.');
         return;
     }
+    if(action==='connect'&&graphMode==='states'){toast('Drag a state output port onto another state to create a transition.');return;}
     if (action === 'connect') {
         select('@connect');
         setPropertiesVisible(true);
         return;
     }
     if (action.startsWith('workspace:')) {
+        if(action!=='workspace:edit')inspectorScope='robot';
         setWorkspaceView(action.slice(10) as WorkspaceView);
         return;
     }
@@ -604,7 +743,7 @@ document.addEventListener('click', async e => {
         return;
     }
     if (action === 'new') {
-        const next = sampleRobot();
+        const next=createSeasonRobot($<HTMLSelectElement>('#new-season')?.value ?? 'reefscape-2025');
         next.name = 'Untitled robot';
         next.subsystems = [];
         next.surfaces = [];
@@ -614,7 +753,7 @@ document.addEventListener('click', async e => {
         return;
     }
     if (action === 'sample') {
-        load(sampleRobot());
+        load(createSeasonRobot(librarySeason));
         return;
     }
     if (action.startsWith('open:') || action.startsWith('copy:')) {
@@ -691,7 +830,7 @@ window.addEventListener('keydown', e => {
             return;
         capturingBinding = undefined;
         commit(d => {
-            const item = d.edges.find(s => s.id === capture.id);
+            const item = capture.path==='stateEdge.key' ? d.subsystems.find(s=>s.id===capture.id)?.stateTransitions?.find(e=>e.id===stateEdgeSelection) : d.edges.find(s => s.id === capture.id);
             if (item)
                 item.key = key;
         });
@@ -713,7 +852,7 @@ window.addEventListener('keydown', e => {
     const key = normalizeBinding(e.key) ?? normalizeBinding(e.code);
     if (!key)
         return;
-    const bound = doc.edges.some(s => normalizeBinding(s.key) === key);
+    const bound = [...doc.edges,...doc.subsystems.flatMap(s=>s.stateTransitions ?? [])].some(s => normalizeBinding(s.key) === key);
     if (mode !== 'edit' && (bound || ['w', 'a', 's', 'd', 'arrowleft', 'arrowright'].includes(key))) {
         e.preventDefault();
         e.stopPropagation();
@@ -802,3 +941,5 @@ function setWorkspaceView(view: WorkspaceView) {
     requestAnimationFrame(() => { if (view === 'graph') graph.fit(); });
 }
 setWorkspaceView(activeView);
+
+document.addEventListener('change',e=>{const input=e.target as HTMLSelectElement;if(input.id==='new-season'){librarySeason=input.value;void showLibrary();}});

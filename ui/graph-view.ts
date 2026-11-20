@@ -1,6 +1,7 @@
 import { nodeName, validConnection, surfaceForEdge, type RobotDocument } from '../contracts/model';
 import { bindingLabel } from '../contracts/bindings';
-import { graphNode, nodePosition, transitionCurve } from './graph-model';
+import {pieceTypesFor} from '../seasons/registry';
+import { graphNode, nodePosition, transitionCurve, nodePorts } from './graph-model';
 import type { Snapshot } from '../simulation/protocol';
 export const esc = (s: unknown) => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!));
 export class GraphView {
@@ -14,11 +15,14 @@ export class GraphView {
     ] = [0, 0];
     private zoom = 1;
     private pending?: string;
+    private pendingType='';
     private editing = true;
+    nodeTypeLabel='Subsystem';
+    defaultStateId='';
     constructor(private host: HTMLElement, private select: (id: string) => void, private move: (id: string, p: [
         number,
         number
-    ]) => void, private connect: (a: string, b: string) => void, private inspect: (id: string) => void = select) {
+    ]) => void, private connect: (a: string, b: string,type?:string) => void, private inspect: (id: string) => void = select) {
         new ResizeObserver(() => { if (!this.dragging) this.fit(); }).observe(host);
         host.addEventListener('wheel', e => {
             e.preventDefault();
@@ -47,7 +51,7 @@ export class GraphView {
         if (!ids.length) { this.zoom = 1; this.offset = [0, 0]; this.render(); return; }
         const nodes = ids.map(id => ({p: this.position(id), ...graphNode(this.document!, id)}));
         const minX = Math.min(...nodes.map(n => n.p[0])) - 15, maxX = Math.max(...nodes.map(n => n.p[0] + n.width)) + 15;
-        const minY = Math.min(...nodes.map(n => n.p[1])) - 45, maxY = Math.max(...nodes.map(n => n.p[1] + n.height)) + 15;
+        const minY = Math.min(...nodes.map(n => n.p[1])) - (this.nodeTypeLabel==='State'||pieceTypesFor(this.document).length===1?45:125), maxY = Math.max(...nodes.map(n => n.p[1] + n.height)) + 15;
         this.zoom = Math.min(1.2, (this.host.clientWidth - 48) / (maxX - minX), (this.host.clientHeight - 48) / (maxY - minY));
         this.offset = [(this.host.clientWidth - (maxX - minX) * this.zoom) / 2 - minX * this.zoom, (this.host.clientHeight - (maxY - minY) * this.zoom) / 2 - minY * this.zoom];
         this.render();
@@ -84,16 +88,16 @@ export class GraphView {
         number,
         number
     ] { const r = this.host.getBoundingClientRect(); return [(event.clientX - r.left - this.offset[0]) / this.zoom, (event.clientY - r.top - this.offset[1]) / this.zoom]; }
-    private editableConnection(source: string, target: string) {
+    private editableConnection(source: string, target: string,type?:string) {
         return !!this.document?.subsystems.some(s => s.id === source) && this.document.subsystems.some(s => s.id === target) && validConnection(this.document, source, target);
     }
-    private connectionDrag(event: PointerEvent, source: string, svg: SVGSVGElement) {
+    private connectionDrag(event: PointerEvent, source: string, svg: SVGSVGElement,pieceType?:string) {
         event.preventDefault();
         event.stopPropagation();
         if (!this.editing || !this.document?.subsystems.some(s => s.id === source))
             return;
         this.dragging = true;
-        const start = this.position(source), geometry = graphNode(this.document!, source), sx = start[0] + geometry.width, sy = start[1] + geometry.portY;
+        const start = this.position(source), geometry = graphNode(this.document!, source), sx = start[0] + geometry.width, sy = start[1]+(nodePorts(this.document!,source,this.nodeTypeLabel==='State').outputs.find(p=>p.type===pieceType)?.y ?? geometry.portY);
         const group = svg.querySelector<SVGGElement>('.graph-content')!;
         const preview = document.createElementNS('http://www.w3.org/2000/svg', 'path');
         preview.setAttribute('class', 'connection-preview');
@@ -106,11 +110,11 @@ export class GraphView {
             const [x, y] = this.point(e), dx = Math.max(60, Math.abs(x - sx) * .5);
             preview.setAttribute('d', `M ${sx} ${sy} C ${sx + dx} ${sy},${x - dx} ${y},${x} ${y}`);
             distance = Math.hypot(e.clientX - event.clientX, e.clientY - event.clientY);
-            const target = document.elementFromPoint(e.clientX, e.clientY)?.closest<SVGElement>('[data-node]')?.dataset.node;
+            const under=document.elementFromPoint(e.clientX,e.clientY),port=under?.closest<SVGElement>('[data-in]');const target=port&&port.dataset.piece!==pieceType?undefined:under?.closest<SVGElement>('[data-node]')?.dataset.node;
             svg.querySelectorAll<SVGElement>('[data-node]').forEach(el => el.classList.toggle('drop-target', el.dataset.node === target && !!target && this.editableConnection(source, target)));
         };
         const finish = (e: PointerEvent, cancelled = false) => {
-            const target = document.elementFromPoint(e.clientX, e.clientY)?.closest<SVGElement>('[data-node]')?.dataset.node;
+            const under=document.elementFromPoint(e.clientX,e.clientY),port=under?.closest<SVGElement>('[data-in]');const target=port&&port.dataset.piece!==pieceType?undefined:under?.closest<SVGElement>('[data-node]')?.dataset.node;
             svg.removeEventListener('pointermove', drag);
             svg.removeEventListener('pointerup', up);
             svg.removeEventListener('pointercancel', cancel);
@@ -120,9 +124,9 @@ export class GraphView {
             this.dragging = false;
             this.pending = undefined;
             if (!cancelled && distance < 4 && (!target || target === source))
-                this.pending = source;
+                {this.pending = source;this.pendingType=pieceType ?? '';}
             else if (!cancelled && target && target !== source)
-                this.connect(source, target);
+                this.connect(source,target,pieceType);
             this.render();
         };
         const up = (e: PointerEvent) => finish(e), cancel = (e: PointerEvent) => finish(e, true);
@@ -145,19 +149,20 @@ export class GraphView {
         const tokens = this.snapshot?.tokens ?? [], tick = this.snapshot?.tick ?? 0;
         const edges = d.edges.map(e => {
             const width = Math.max(76, bindingLabel(e.key).length * 7 + 20);
-            const curve = transitionCurve(this.position(e.source), this.position(e.target), graphNode(d, e.source), graphNode(d, e.target), width);
+            const ga=graphNode(d,e.source),gb=graphNode(d,e.target),type=e.pieceType ?? nodePorts(d,e.source,this.nodeTypeLabel==='State').outputs[0]?.type;
+            const curve = transitionCurve(this.position(e.source),this.position(e.target),{...ga,portY:nodePorts(d,e.source,this.nodeTypeLabel==='State').outputs.find(p=>p.type===type)?.y ?? ga.portY},{...gb,portY:nodePorts(d,e.target,this.nodeTypeLabel==='State').inputs.find(p=>p.type===type)?.y ?? gb.portY},width,this.nodeTypeLabel==='State'?0:Math.max(0,pieceTypesFor(d).findIndex(p=>p.id===type)));
             const [cx, cy] = curve.center, path = curve.path;
             const flight = tokens.find(t => t.flight?.edge === e.id)?.flight, f = flight ? Math.min(1, (tick - flight.start) / (flight.end - flight.start)) : 0;
             const [x, y] = curve.point(f);
             return `<g class="graph-edge ${surfaceForEdge(d, e) ? 'automatic' : ''} ${e.id === this.selected ? 'selected' : ''} ${flight ? 'flowing' : ''}" data-edge="${esc(e.id)}" tabindex="0" role="button" aria-label="${esc(nodeName(d, e.source))} to ${esc(nodeName(d, e.target))}"><path class="edge-hit" d="${path}"/><path class="edge-line" d="${path}" marker-end="url(#arrow)"/><rect x="${cx-width/2}" y="${cy-22}" width="${width}" height="44" rx="5"/><text x="${cx}" y="${cy-5}" text-anchor="middle">${esc(bindingLabel(e.key))}</text><text x="${cx}" y="${cy+12}" text-anchor="middle">${e.duration === 0 ? 'Instant' : e.duration.toFixed(2) + ' s'}</text>${flight ? `<circle class="token-dot" cx="${x}" cy="${y}" r="5"/>` : ''}</g>`;
         }).join('');
         const nodes = [...d.subsystems.map(n => ({ ...n, kind: 'subsystem' })), ...d.surfaces.map(n => ({ ...n, kind: n.type }))];
-        this.host.innerHTML = `<svg class="graph-svg" aria-label="Travel Path Graph"><defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M 0 0 L 10 5 L 0 10 z" fill="#91a7b5"/></marker><pattern id="dots" width="24" height="24" patternUnits="userSpaceOnUse"><circle cx="1" cy="1" r=".8" fill="#2e5b9b"/></pattern></defs><rect width="100%" height="100%" fill="url(#dots)"/><g class="graph-content" transform="translate(${this.offset[0]},${this.offset[1]}) scale(${this.zoom})">${edges}${nodes.map(n => {
+        this.host.innerHTML = `<svg class="graph-svg" aria-label="${this.nodeTypeLabel==='State'?'Subsystem States Graph':'Travel Path Graph'}"><defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M 0 0 L 10 5 L 0 10 z" fill="#91a7b5"/></marker><pattern id="dots" width="24" height="24" patternUnits="userSpaceOnUse"><circle cx="1" cy="1" r=".8" fill="#2e5b9b"/></pattern></defs><rect width="100%" height="100%" fill="url(#dots)"/><g class="graph-content" transform="translate(${this.offset[0]},${this.offset[1]}) scale(${this.zoom})">${edges}${nodes.map(n => {
             const p = this.position(n.id), g = graphNode(d, n.id);
             const words = n.name.match(/.{1,14}(?:\s|$)|.{1,14}/g) ?? [n.name];
             const lines = words.slice(0, 2).map((line, i) => `<tspan x="14" dy="${i ? 16 : 0}">${esc(line.trim())}${i === 1 && words.length > 2 ? '…' : ''}</tspan>`).join('');
-            const nameY = n.kind === 'subsystem' ? 53 : 43, capacityY = n.kind === 'subsystem' ? 116 : 81;
-            return `<g class="graph-node ${n.kind} ${n.id === this.selected ? 'selected' : ''} ${this.pending === n.id ? 'pending' : ''}" transform="translate(${p[0]},${p[1]})" data-node="${esc(n.id)}" tabindex="0" role="button" aria-label="${esc(n.name)}"><title>${esc(n.name)} · ${g.type} · Capacity ${g.capacity}</title><rect width="${g.width}" height="${g.height}" rx="4"/><rect class="node-stripe" width="4" height="${g.height - 18}" y="9" rx="2"/><text class="node-kind" x="14" y="23">${g.type}</text><text class="node-name" x="14" y="${nameY}">${lines}</text><text class="node-info" x="14" y="${capacityY}">Capacity ${g.capacity}</text><circle class="port input-port" cx="0" cy="${g.portY}" r="8" data-in="${esc(n.id)}"><title>Input</title></circle><circle class="port output-port" cx="${g.width}" cy="${g.portY}" r="8" data-out="${esc(n.id)}"><title>Drag a connection</title></circle></g>`;
+            const nameY=n.kind==='subsystem'?48:43,capacityY=n.kind==='subsystem'?136:86;const ports=nodePorts(d,n.id,this.nodeTypeLabel==='State');
+            return `<g class="graph-node ${n.kind} ${n.id === this.selected ? 'selected' : ''} ${this.pending === n.id ? 'pending' : ''}" transform="translate(${p[0]},${p[1]})" data-node="${esc(n.id)}" tabindex="0" role="button" aria-label="${esc(n.name)}"><title>${esc(n.name)} · ${g.type} · Capacity ${g.capacity}</title><rect width="${g.width}" height="${g.height}" rx="4"/><rect class="node-stripe" width="4" height="${g.height - 18}" y="9" rx="2"/><text class="node-kind" x="14" y="23">${n.kind === 'subsystem' ? this.nodeTypeLabel : g.type}${n.id===this.defaultStateId?' · Default':''}</text><text class="node-name" x="14" y="${nameY}">${lines}</text><text class="node-info" x="14" y="${capacityY}">Capacity ${g.capacity}</text>${ports.inputs.map(port=>`<circle class="port input-port" cx="0" cy="${port.y}" r="7" data-in="${esc(n.id)}" data-piece="${esc(port.type)}" style="fill:${port.color}"><title>${esc(port.label)} entry</title></circle>${ports.inputs.length>1&&n.kind==='subsystem'?`<text class="port-label" x="12" y="${port.y+4}">${esc(port.label)}</text>`:''}`).join('')}${ports.outputs.map(port=>`<circle class="port output-port" cx="${g.width}" cy="${port.y}" r="7" data-out="${esc(n.id)}" data-piece="${esc(port.type)}" style="fill:${port.color}"><title>${esc(port.label)} exit</title></circle>${ports.outputs.length>1&&n.kind==='subsystem'?`<text class="port-label" text-anchor="end" x="${g.width-12}" y="${port.y+4}">${esc(port.label)}</text>`:''}`).join('')}</g>`;
         }).join('')}</g></svg>${this.pending ? '<div class="graph-instruction">Choose a destination</div>' : ''}`;
         const svg = this.host.querySelector('svg')!;
         svg.querySelectorAll<SVGGElement>('[data-edge]').forEach(el => {
@@ -179,14 +184,14 @@ export class GraphView {
                 if (e.button !== 0)
                     return;
                 if ((e.target as Element).hasAttribute('data-out')) {
-                    this.connectionDrag(e, node, svg);
+                    this.connectionDrag(e,node,svg,(e.target as SVGElement).dataset.piece);
                     return;
                 }
                 e.stopPropagation();
                 if (this.pending && this.editing) {
                     const source = this.pending;
                     this.pending = undefined;
-                    this.connect(source, node);
+                    this.connect(source,node,this.pendingType);
                     return;
                 }
                 if (!this.editing) {

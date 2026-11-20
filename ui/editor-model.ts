@@ -1,3 +1,4 @@
+import {snapSize,snapMetres,HALF_INCH} from '../contracts/inch-grid';
 import type { RobotDocument, Vec3 } from '../contracts/model';
 import { nodePosition } from './graph-model';
 export const NODE_WIDTH = 174, NODE_HEIGHT = 144;
@@ -22,6 +23,6 @@ export function fillBounds(height: number, owned: number, capacity: number): [
 ] {
     return [-height / 2, -height / 2 + height * inventoryFraction(owned, capacity)];
 }
-export function resizedDimensions(size: Vec3, scale: Vec3): Vec3 {
-    return size.map((n, i) => Math.max(.05, Math.min(3, Math.round(n * scale[i] * 1000) / 1000))) as Vec3;
+export function resizedDimensions(size: Vec3, scale: Vec3,max=3): Vec3 {
+    return size.map((n,i)=>snapMetres(n*scale[i],HALF_INCH,max)) as Vec3;
 }

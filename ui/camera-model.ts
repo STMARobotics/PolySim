@@ -8,7 +8,7 @@ export function configureEditOrbit(controls: OrbitControls) {
 }
 export type DriverStation = 1 | 2 | 3;
 export function stationCameraPosition(station: DriverStation, fieldLength = 12, fieldWidth = 8): Vec3 {
-    return [-fieldLength / 2 - 1.2, (2 - station) * fieldWidth / 3, 1.65];
+    return [-fieldLength / 2 - .3, (2 - station) * fieldWidth / 3, 1.9];
 }
 export function trackingFactor(dt: number, response = 12): number {
     return 1 - Math.exp(-response * Math.max(0, Math.min(.1, dt)));

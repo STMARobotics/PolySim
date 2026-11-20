@@ -14,20 +14,20 @@ export interface SavedRun {
     engine: string;
     season: string;
 }
-let ROBOTS = 'polysim.robots.v1', DRAFT = 'polysim.draft.v1', RUNS = 'polysim.runs.v1';
+let ROBOTS = 'polysim.robots.v2', DRAFT = 'polysim.draft.v2', RUNS = 'polysim.runs.v2';
 let BASE = 'polysim';
 export function scopeStorage(subject?: string) {
     BASE=subject?`polysim.user.${subject}`:'polysim.signed-out';
-    ROBOTS=BASE+'.robots.v1';DRAFT=BASE+'.draft.v1';RUNS=BASE+'.runs.v1';
+    ROBOTS=BASE+'.robots.v2';DRAFT=BASE+'.draft.v2';RUNS=BASE+'.runs.v2';
     try {
         const previous=localStorage.getItem('polysim.active-user');
-        if(previous && previous!==subject)for(const key of ['robots','draft','runs','cloud-revisions'])localStorage.removeItem(`polysim.user.${previous}.${key}.v1`);
+        if(previous && previous!==subject)for(const key of ['robots','draft','runs','cloud-revisions'])localStorage.removeItem(`polysim.user.${previous}.${key}.v2`);
         if(subject)localStorage.setItem('polysim.active-user',subject);else localStorage.removeItem('polysim.active-user');
     } catch {/* Shared saves still work when browser recovery storage is unavailable. */}
 }
-export function clearScopedStorage() {try {for(const key of [ROBOTS,DRAFT,RUNS,BASE+'.cloud-revisions.v1'])localStorage.removeItem(key);localStorage.removeItem('polysim.active-user');}catch {/* No recovery data can be read while storage is blocked. */}}
-export function readCloudRevisions():Record<string,number> {try {return JSON.parse(localStorage.getItem(BASE+'.cloud-revisions.v1') ?? '{}');}catch{return {};}}
-export function writeCloudRevision(id:string,revision:number) {localStorage.setItem(BASE+'.cloud-revisions.v1',JSON.stringify({...readCloudRevisions(),[id]:revision}));}
+export function clearScopedStorage() {try {for(const key of [ROBOTS,DRAFT,RUNS,BASE+'.cloud-revisions.v2'])localStorage.removeItem(key);localStorage.removeItem('polysim.active-user');}catch {/* No recovery data can be read while storage is blocked. */}}
+export function readCloudRevisions():Record<string,number> {try {return JSON.parse(localStorage.getItem(BASE+'.cloud-revisions.v2') ?? '{}');}catch{return {};}}
+export function writeCloudRevision(id:string,revision:number) {localStorage.setItem(BASE+'.cloud-revisions.v2',JSON.stringify({...readCloudRevisions(),[id]:revision}));}
 export function readRobots(): SavedRobot[] {
     try {
         return JSON.parse(localStorage.getItem(ROBOTS) ?? '[]').map((r: SavedRobot) => ({ ...r, document: parseDocument(r.document) }));

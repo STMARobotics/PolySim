@@ -1,3 +1,4 @@
+import {seasons} from '../seasons/registry';
 import type { Auth, User } from './auth';
 import { canonical, hash, headers, HttpError, json, response, type Request } from './http';
 import { documentInput, object, uuid } from './documents';
@@ -30,7 +31,7 @@ export class Robots {
         const session=['GET','HEAD'].includes(method)?await this.auth.session(req):await this.auth.mutation(req);
         if(method==='GET' && !id) {
             const season=req.queryStringParameters?.seasonId ?? 'practice-balls';
-            if(season!=='practice-balls')throw new HttpError(400,'SEASON','Unknown season.');
+            if(!seasons.some(s=>s.id===season))throw new HttpError(400,'SEASON','Unknown season.');
             const archived=req.queryStringParameters?.archived==='true';
             if(archived && session.user.role!=='admin')throw new HttpError(403,'ADMIN_REQUIRED','Administrator access required.');
             const partition=this.listPK(season,archived), {limit,after}=this.page(req,partition);

@@ -2,8 +2,37 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 import {sampleRobot} from '../../seasons/practice';
+import {ensureStates,addState} from '../../contracts/states';
+import {TARGETING_MODES} from '../../contracts/targeting';
 import {fixture,request} from './support';
 const key=()=>({'idempotency-key':randomUUID()});
+
+test('authenticated API advertises targeting and round-trips all targeting modes and ranges',async()=>{
+    const f=fixture(),session=await f.login();
+    const manifest=await f.app.handle(request('/api/seasons/practice-balls','GET',undefined,session));
+    assert.ok(JSON.parse(manifest.body).capabilities.includes('subsystem-targeting'));
+    for(const mode of TARGETING_MODES) {
+        const document=ensureStates(sampleRobot());document.subsystems[2].targetingMode=mode;document.subsystems[2].targetingFreedom=Math.PI/2;
+        const created=await f.app.handle(request('/api/robots','POST',{document},{...session,...key()}));
+        assert.equal(created.statusCode,201);assert.equal(JSON.parse(created.body).runnable,true);
+        const read=await f.app.handle(request('/api/robots/'+document.id,'GET',undefined,session)),saved=JSON.parse(read.body).document;
+        assert.equal(saved.subsystems[2].targetingMode,mode);assert.equal(saved.subsystems[2].targetingFreedom,Math.PI/2);
+    }
+});
+
+test('authenticated API advertises Not Pressed and persists it in state and travel transitions',async()=>{
+    const f=fixture(),session=await f.login(),document=ensureStates(sampleRobot());
+    const sub=document.subsystems[0],to=addState(document,sub,sub.states![0]);
+    sub.stateTransitions!.push({id:'return',source:sub.states![0].id,target:to.id,key:'space',trigger:'not-pressed',duration:.25});
+    document.edges[1].trigger='not-pressed';
+    const manifest=await f.app.handle(request('/api/seasons/practice-balls','GET',undefined,session));
+    assert.equal(manifest.statusCode,200);assert.ok(JSON.parse(manifest.body).capabilities.includes('not-pressed-trigger'));
+    const created=await f.app.handle(request('/api/robots','POST',{document},{...session,...key()}));
+    assert.equal(created.statusCode,201);assert.equal(JSON.parse(created.body).runnable,true);
+    const read=await f.app.handle(request('/api/robots/'+document.id,'GET',undefined,session));
+    assert.equal(read.statusCode,200);const saved=JSON.parse(read.body).document;
+    assert.equal(saved.edges[1].trigger,'not-pressed');assert.equal(saved.subsystems[0].stateTransitions[0].trigger,'not-pressed');
+});
 test('create persists immutable revision and metadata atomically, and same request retries do not create revisions',async()=>{
     const f=fixture(),session=await f.login(),document=sampleRobot(),headers={...session,...key()},req=request('/api/robots','POST',{document},headers);
     const first=await f.app.handle(req), retry=await f.app.handle(req);assert.equal(first.statusCode,201);assert.equal(retry.body,first.body);

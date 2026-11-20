@@ -7,4 +7,4 @@ const identity=await new STSClient({region}).send(new GetCallerIdentityCommand({
 if(identity.Account!==account)throw Error('Wrong AWS account. Expected '+account);
 const metadata=await new SSMClient({region}).send(new GetParameterCommand({Name:googleSecretParameter,WithDecryption:false}));
 if(metadata.Parameter?.Type!=='SecureString')throw Error('Shared Google OAuth SecureString is missing or has the wrong type.');
-console.log('Verified AWS account, region and shared OAuth parameter metadata. Secret value was not read.');
+console.log('Verified AWS account, region and OAuth SecureString type. Its value was not decrypted or logged.');

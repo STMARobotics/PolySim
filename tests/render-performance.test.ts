@@ -20,20 +20,20 @@ test('live snapshots omit the growing recording while full snapshots preserve re
 test('instanced piece rendering interpolates by ID, removes captured pieces and grows without duplicating geometry', () => {
     const piece = (id:string,x:number) => ({id,position:[x,0,1],rotation:[0,0,0,1]});
     const mesh = new THREE.InstancedMesh(new THREE.SphereGeometry(.09,12,8),new THREE.MeshStandardMaterial(),2);
-    const state:any = {pieceMesh:mesh,frames:{previousPieces:new Map([['a',piece('a',0)],['b',piece('b',2)]])},instanceTransform:new THREE.Object3D(),fromRotation:new THREE.Quaternion(),toRotation:new THREE.Quaternion(),balls:new THREE.Group()};
+    const state:any = {pieceMeshes:new Map([['ball',mesh]]),frames:{previousPieces:new Map([['a',piece('a',0)],['b',piece('b',2)]])},instanceTransform:new THREE.Object3D(),fromRotation:new THREE.Quaternion(),toRotation:new THREE.Quaternion(),balls:new THREE.Group()};
     state.balls.add(mesh);
     const update = (pieces:unknown[],alpha:number) => (Viewport.prototype as any).updatePieces.call(state,pieces,alpha);
-    const position = (index:number) => { const m=new THREE.Matrix4();state.pieceMesh.getMatrixAt(index,m);return new THREE.Vector3().setFromMatrixPosition(m); };
+    const position = (index:number) => { const m=new THREE.Matrix4();state.pieceMeshes.get('ball').getMatrixAt(index,m);return new THREE.Vector3().setFromMatrixPosition(m); };
     try {
         update([piece('a',2),piece('b',4)],.5);
-        assert.equal(state.pieceMesh.count,2);
+        assert.equal(state.pieceMeshes.get('ball').count,2);
         assert.equal(position(0).x,1);assert.equal(position(1).x,3);
         update([piece('b',4)],.5);
-        assert.equal(state.pieceMesh.count,1);assert.equal(position(0).x,3);
+        assert.equal(state.pieceMeshes.get('ball').count,1);assert.equal(position(0).x,3);
         update([piece('a',2),piece('b',4),piece('c',6)],1);
-        assert.equal(state.pieceMesh.count,3);
-        assert.equal(state.pieceMesh.geometry,mesh.geometry);
+        assert.equal(state.pieceMeshes.get('ball').count,3);
+        assert.equal(state.pieceMeshes.get('ball').geometry,mesh.geometry);
         assert.equal(position(2).x,6);
         assert.equal(state.balls.children.length,1);
-    } finally {state.pieceMesh.dispose();mesh.geometry.dispose();(mesh.material as THREE.Material).dispose();}
+    } finally {state.pieceMeshes.get('ball').dispose();mesh.geometry.dispose();(mesh.material as THREE.Material).dispose();}
 });
