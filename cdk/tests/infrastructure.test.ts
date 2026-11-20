@@ -10,9 +10,9 @@ const edge=new CertificateStack(app,'test-certificate',{env:{...env,region:'us-e
 const backend=new BackendStack(app,'test-backend',{env,crossRegionReferences:true});
 const frontend=new FrontendStack(app,'test-frontend',{env,crossRegionReferences:true,backend,edge});
 const b=Template.fromStack(backend),f=Template.fromStack(frontend),e=Template.fromStack(edge);
-test('deployment coordinates and Google configuration match FMEA while resources are isolated to PolySim',()=>{
+test('deployment coordinates and Google configuration while resources are isolated to PolySim',()=>{
     assert.equal(backend.account,'738044534240');assert.equal(backend.region,'us-east-2');assert.equal(edge.region,'us-east-1');
-    b.hasResourceProperties('AWS::Lambda::Function',{Runtime:'nodejs24.x',Architectures:['arm64'],Environment:{Variables:Match.objectLike({APP_ORIGIN:'https://polysim.7028robotics.com',ALLOWED_DOMAIN:'stmarobotics.org',GOOGLE_SECRET_PARAMETER:'/fmea/google-client-secret',ADMIN_EMAILS:'zack.osowski@stmarobotics.org,andy.gasser@stmarobotics.org'})}});
+    b.hasResourceProperties('AWS::Lambda::Function',{Runtime:'nodejs24.x',Architectures:['arm64'],Environment:{Variables:Match.objectLike({APP_ORIGIN:'https://polysim.7028robotics.com',ALLOWED_DOMAIN:'stmarobotics.org',GOOGLE_SECRET_PARAMETER:'/polysim/google-client-secret',ADMIN_EMAILS:'zack.osowski@stmarobotics.org,andy.gasser@stmarobotics.org'})}});
     e.hasResourceProperties('AWS::CertificateManager::Certificate',{DomainName:'polysim.7028robotics.com',ValidationMethod:'DNS'});
 });
 test('both DynamoDB tables have retention, encryption, PITR and deletion protection; data has a paginated index and backups',()=>{
@@ -26,7 +26,7 @@ test('Lambda permissions contain no scans and give only the auth role access to 
     const grants=Object.entries(policies).flatMap(([id,r])=>r.Properties.PolicyDocument.Statement.map((statement:any)=>({id,statement})));
     assert.ok(!grants.some(({statement})=>JSON.stringify(statement.Action).includes('dynamodb:Scan')));
     const secret=grants.filter(({statement})=>JSON.stringify(statement.Action).includes('ssm:GetParameter'));
-    assert.equal(secret.length,1);assert.match(secret[0].id,/authFunction/);assert.match(JSON.stringify(secret[0].statement.Resource),/parameter\/fmea\/google-client-secret/);
+    assert.equal(secret.length,1);assert.match(secret[0].id,/authFunction/);assert.match(JSON.stringify(secret[0].statement.Resource),/parameter\/polysim\/google-client-secret/);
     const decrypt=grants.filter(({statement})=>JSON.stringify(statement.Action).includes('kms:Decrypt'));
     assert.equal(decrypt.length,1);assert.ok(decrypt[0].statement.Condition.StringEquals['kms:EncryptionContext:PARAMETER_ARN']);
 });
