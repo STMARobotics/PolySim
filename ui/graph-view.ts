@@ -1,0 +1,233 @@
+import { nodeName, validConnection, surfaceForEdge, type RobotDocument } from '../contracts/model';
+import { bindingLabel } from '../contracts/bindings';
+import { graphNode, nodePosition, transitionCurve } from './graph-model';
+import type { Snapshot } from '../simulation/protocol';
+export const esc = (s: unknown) => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!));
+export class GraphView {
+    private document?: RobotDocument;
+    private selected = '';
+    private snapshot?: Snapshot;
+    private dragging = false;
+    private offset: [
+        number,
+        number
+    ] = [0, 0];
+    private zoom = 1;
+    private pending?: string;
+    private editing = true;
+    constructor(private host: HTMLElement, private select: (id: string) => void, private move: (id: string, p: [
+        number,
+        number
+    ]) => void, private connect: (a: string, b: string) => void, private inspect: (id: string) => void = select) {
+        new ResizeObserver(() => { if (!this.dragging) this.fit(); }).observe(host);
+        host.addEventListener('wheel', e => {
+            e.preventDefault();
+            if (this.dragging)
+                return;
+            this.zoom = Math.max(.2, Math.min(2, this.zoom * (e.deltaY > 0 ? .9 : 1.1)));
+            this.render();
+        }, { passive: false });
+    }
+    set(d: RobotDocument, selected: string, editing: boolean) {
+        this.document = d;
+        this.selected = selected;
+        this.editing = editing;
+        if (editing)
+            this.snapshot = undefined;
+        this.render();
+    }
+    update(s: Snapshot) {
+        this.snapshot = s;
+        if (!this.dragging)
+            this.render();
+    }
+    fit() {
+        if (!this.document || this.host.clientWidth < 80 || this.host.clientHeight < 80) return;
+        const ids = [...this.document.subsystems, ...this.document.surfaces].map(n => n.id);
+        if (!ids.length) { this.zoom = 1; this.offset = [0, 0]; this.render(); return; }
+        const nodes = ids.map(id => ({p: this.position(id), ...graphNode(this.document!, id)}));
+        const minX = Math.min(...nodes.map(n => n.p[0])) - 15, maxX = Math.max(...nodes.map(n => n.p[0] + n.width)) + 15;
+        const minY = Math.min(...nodes.map(n => n.p[1])) - 45, maxY = Math.max(...nodes.map(n => n.p[1] + n.height)) + 15;
+        this.zoom = Math.min(1.2, (this.host.clientWidth - 48) / (maxX - minX), (this.host.clientHeight - 48) / (maxY - minY));
+        this.offset = [(this.host.clientWidth - (maxX - minX) * this.zoom) / 2 - minX * this.zoom, (this.host.clientHeight - (maxY - minY) * this.zoom) / 2 - minY * this.zoom];
+        this.render();
+    }
+    zoomBy(f: number) { this.zoom = Math.max(.2, Math.min(2, this.zoom * f)); this.render(); }
+    focus(id: string) {
+        if (!this.document || this.host.clientWidth < 80 || this.host.clientHeight < 80)
+            return;
+        const edge = this.document.edges.find(e => e.id === id);
+        const nodes = [...this.document.subsystems, ...this.document.surfaces];
+        let center: [
+            number,
+            number
+        ];
+        if (edge) {
+            const a = this.position(edge.source), b = this.position(edge.target), ga = graphNode(this.document, edge.source), gb = graphNode(this.document, edge.target);
+            center = [(a[0] + ga.width + b[0]) / 2, (a[1] + ga.portY + b[1] + gb.portY) / 2];
+        }
+        else if (nodes.some(n => n.id === id)) {
+            const p = this.position(id);
+            const g = graphNode(this.document, id);
+            center = [p[0] + g.width / 2, p[1] + g.height / 2];
+        }
+        else {
+            const positions = nodes.map(n => this.position(n.id));
+            center = positions.length ? [(Math.min(...positions.map(p => p[0])) + Math.max(...positions.map(p => p[0]))) / 2 + 87, (Math.min(...positions.map(p => p[1])) + Math.max(...positions.map(p => p[1]))) / 2 + 38] : [87, 38];
+        }
+        this.zoom = .9;
+        this.offset = [this.host.clientWidth / 2 - center[0] * this.zoom, this.host.clientHeight / 2 - center[1] * this.zoom];
+        this.render();
+    }
+    private position(id: string): [number, number] { return nodePosition(this.document!, id); }
+    private point(event: PointerEvent): [
+        number,
+        number
+    ] { const r = this.host.getBoundingClientRect(); return [(event.clientX - r.left - this.offset[0]) / this.zoom, (event.clientY - r.top - this.offset[1]) / this.zoom]; }
+    private editableConnection(source: string, target: string) {
+        return !!this.document?.subsystems.some(s => s.id === source) && this.document.subsystems.some(s => s.id === target) && validConnection(this.document, source, target);
+    }
+    private connectionDrag(event: PointerEvent, source: string, svg: SVGSVGElement) {
+        event.preventDefault();
+        event.stopPropagation();
+        if (!this.editing || !this.document?.subsystems.some(s => s.id === source))
+            return;
+        this.dragging = true;
+        const start = this.position(source), geometry = graphNode(this.document!, source), sx = start[0] + geometry.width, sy = start[1] + geometry.portY;
+        const group = svg.querySelector<SVGGElement>('.graph-content')!;
+        const preview = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+        preview.setAttribute('class', 'connection-preview');
+        preview.setAttribute('marker-end', 'url(#arrow)');
+        group.append(preview);
+        svg.querySelectorAll<SVGGElement>('[data-node]').forEach(el => el.classList.toggle('can-connect', this.editableConnection(source, el.dataset.node!)));
+        svg.setPointerCapture(event.pointerId);
+        let distance = 0;
+        const drag = (e: PointerEvent) => {
+            const [x, y] = this.point(e), dx = Math.max(60, Math.abs(x - sx) * .5);
+            preview.setAttribute('d', `M ${sx} ${sy} C ${sx + dx} ${sy},${x - dx} ${y},${x} ${y}`);
+            distance = Math.hypot(e.clientX - event.clientX, e.clientY - event.clientY);
+            const target = document.elementFromPoint(e.clientX, e.clientY)?.closest<SVGElement>('[data-node]')?.dataset.node;
+            svg.querySelectorAll<SVGElement>('[data-node]').forEach(el => el.classList.toggle('drop-target', el.dataset.node === target && !!target && this.editableConnection(source, target)));
+        };
+        const finish = (e: PointerEvent, cancelled = false) => {
+            const target = document.elementFromPoint(e.clientX, e.clientY)?.closest<SVGElement>('[data-node]')?.dataset.node;
+            svg.removeEventListener('pointermove', drag);
+            svg.removeEventListener('pointerup', up);
+            svg.removeEventListener('pointercancel', cancel);
+            window.removeEventListener('keydown', escape);
+            if (svg.hasPointerCapture(event.pointerId))
+                svg.releasePointerCapture(event.pointerId);
+            this.dragging = false;
+            this.pending = undefined;
+            if (!cancelled && distance < 4 && (!target || target === source))
+                this.pending = source;
+            else if (!cancelled && target && target !== source)
+                this.connect(source, target);
+            this.render();
+        };
+        const up = (e: PointerEvent) => finish(e), cancel = (e: PointerEvent) => finish(e, true);
+        const escape = (e: KeyboardEvent) => {
+            if (e.key === 'Escape') {
+                e.preventDefault();
+                finish(event, true);
+            }
+        };
+        svg.addEventListener('pointermove', drag);
+        svg.addEventListener('pointerup', up);
+        svg.addEventListener('pointercancel', cancel);
+        window.addEventListener('keydown', escape);
+        drag(event);
+    }
+    private render() {
+        const d = this.document;
+        if (!d)
+            return;
+        const tokens = this.snapshot?.tokens ?? [], tick = this.snapshot?.tick ?? 0;
+        const edges = d.edges.map(e => {
+            const width = Math.max(76, bindingLabel(e.key).length * 7 + 20);
+            const curve = transitionCurve(this.position(e.source), this.position(e.target), graphNode(d, e.source), graphNode(d, e.target), width);
+            const [cx, cy] = curve.center, path = curve.path;
+            const flight = tokens.find(t => t.flight?.edge === e.id)?.flight, f = flight ? Math.min(1, (tick - flight.start) / (flight.end - flight.start)) : 0;
+            const [x, y] = curve.point(f);
+            return `<g class="graph-edge ${surfaceForEdge(d, e) ? 'automatic' : ''} ${e.id === this.selected ? 'selected' : ''} ${flight ? 'flowing' : ''}" data-edge="${esc(e.id)}" tabindex="0" role="button" aria-label="${esc(nodeName(d, e.source))} to ${esc(nodeName(d, e.target))}"><path class="edge-hit" d="${path}"/><path class="edge-line" d="${path}" marker-end="url(#arrow)"/><rect x="${cx-width/2}" y="${cy-22}" width="${width}" height="44" rx="5"/><text x="${cx}" y="${cy-5}" text-anchor="middle">${esc(bindingLabel(e.key))}</text><text x="${cx}" y="${cy+12}" text-anchor="middle">${e.duration === 0 ? 'Instant' : e.duration.toFixed(2) + ' s'}</text>${flight ? `<circle class="token-dot" cx="${x}" cy="${y}" r="5"/>` : ''}</g>`;
+        }).join('');
+        const nodes = [...d.subsystems.map(n => ({ ...n, kind: 'subsystem' })), ...d.surfaces.map(n => ({ ...n, kind: n.type }))];
+        this.host.innerHTML = `<svg class="graph-svg" aria-label="Travel Path Graph"><defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M 0 0 L 10 5 L 0 10 z" fill="#91a7b5"/></marker><pattern id="dots" width="24" height="24" patternUnits="userSpaceOnUse"><circle cx="1" cy="1" r=".8" fill="#2e5b9b"/></pattern></defs><rect width="100%" height="100%" fill="url(#dots)"/><g class="graph-content" transform="translate(${this.offset[0]},${this.offset[1]}) scale(${this.zoom})">${edges}${nodes.map(n => {
+            const p = this.position(n.id), g = graphNode(d, n.id);
+            const words = n.name.match(/.{1,14}(?:\s|$)|.{1,14}/g) ?? [n.name];
+            const lines = words.slice(0, 2).map((line, i) => `<tspan x="14" dy="${i ? 16 : 0}">${esc(line.trim())}${i === 1 && words.length > 2 ? '…' : ''}</tspan>`).join('');
+            const nameY = n.kind === 'subsystem' ? 53 : 43, capacityY = n.kind === 'subsystem' ? 116 : 81;
+            return `<g class="graph-node ${n.kind} ${n.id === this.selected ? 'selected' : ''} ${this.pending === n.id ? 'pending' : ''}" transform="translate(${p[0]},${p[1]})" data-node="${esc(n.id)}" tabindex="0" role="button" aria-label="${esc(n.name)}"><title>${esc(n.name)} · ${g.type} · Capacity ${g.capacity}</title><rect width="${g.width}" height="${g.height}" rx="4"/><rect class="node-stripe" width="4" height="${g.height - 18}" y="9" rx="2"/><text class="node-kind" x="14" y="23">${g.type}</text><text class="node-name" x="14" y="${nameY}">${lines}</text><text class="node-info" x="14" y="${capacityY}">Capacity ${g.capacity}</text><circle class="port input-port" cx="0" cy="${g.portY}" r="8" data-in="${esc(n.id)}"><title>Input</title></circle><circle class="port output-port" cx="${g.width}" cy="${g.portY}" r="8" data-out="${esc(n.id)}"><title>Drag a connection</title></circle></g>`;
+        }).join('')}</g></svg>${this.pending ? '<div class="graph-instruction">Choose a destination</div>' : ''}`;
+        const svg = this.host.querySelector('svg')!;
+        svg.querySelectorAll<SVGGElement>('[data-edge]').forEach(el => {
+            el.addEventListener('click', () => this.select(el.dataset.edge!));
+            el.addEventListener('dblclick', () => this.inspect(el.dataset.edge!));
+            el.addEventListener('keydown', e => {
+                if (e.key === 'Enter')
+                    this.inspect(el.dataset.edge!);
+            });
+        });
+        svg.querySelectorAll<SVGGElement>('[data-node]').forEach(el => {
+            const node = el.dataset.node!;
+            el.addEventListener('dblclick', () => this.inspect(node));
+            el.addEventListener('keydown', e => {
+                if (e.key === 'Enter')
+                    this.inspect(node);
+            });
+            el.addEventListener('pointerdown', e => {
+                if (e.button !== 0)
+                    return;
+                if ((e.target as Element).hasAttribute('data-out')) {
+                    this.connectionDrag(e, node, svg);
+                    return;
+                }
+                e.stopPropagation();
+                if (this.pending && this.editing) {
+                    const source = this.pending;
+                    this.pending = undefined;
+                    this.connect(source, node);
+                    return;
+                }
+                if (!this.editing) {
+                    this.select(node);
+                    return;
+                }
+                const start = this.position(node), px = e.clientX, py = e.clientY;
+                let end = start;
+                this.dragging = true;
+                el.setPointerCapture(e.pointerId);
+                const drag = (event: PointerEvent) => { end = [start[0] + (event.clientX - px) / this.zoom, start[1] + (event.clientY - py) / this.zoom]; el.setAttribute('transform', `translate(${end[0]},${end[1]})`); };
+                const finish = (cancel = false) => {
+                    el.removeEventListener('pointermove', drag);
+                    el.removeEventListener('pointerup', up);
+                    el.removeEventListener('pointercancel', cancelDrag);
+                    this.dragging = false;
+                    if (cancel)
+                        this.render();
+                    else if (Math.hypot(end[0] - start[0], end[1] - start[1]) > 2)
+                        this.move(node, end);
+                    else
+                        this.select(node);
+                };
+                const up = () => finish(), cancelDrag = () => finish(true);
+                el.addEventListener('pointermove', drag);
+                el.addEventListener('pointerup', up);
+                el.addEventListener('pointercancel', cancelDrag);
+            });
+        });
+        svg.addEventListener('pointerdown', e => {
+            if (e.button !== 0 || (e.target as Element).closest('[data-node],[data-edge]'))
+                return;
+            this.pending = undefined;
+            const px = e.clientX, py = e.clientY, start = [...this.offset];
+            this.dragging = true;
+            svg.setPointerCapture(e.pointerId);
+            const drag = (ev: PointerEvent) => { this.offset = [start[0] + ev.clientX - px, start[1] + ev.clientY - py]; svg.querySelector('.graph-content')?.setAttribute('transform', `translate(${this.offset[0]},${this.offset[1]}) scale(${this.zoom})`); };
+            const up = () => { this.dragging = false; svg.removeEventListener('pointermove', drag); svg.removeEventListener('pointerup', up); svg.removeEventListener('pointercancel', up); this.render(); };
+            svg.addEventListener('pointermove', drag);
+            svg.addEventListener('pointerup', up);
+            svg.addEventListener('pointercancel', up);
+        });
+    }
+}

@@ -1,0 +1,48 @@
+name: Deploy PolySim production
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: polysim-production
+  cancel-in-progress: false
+jobs:
+  deploy:
+    if: github.ref == 'refs/heads/main'
+    environment: production
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      POLYSIM_ADMIN_SUBJECTS: ${{ vars.POLYSIM_ADMIN_SUBJECTS }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm audit --omit=dev --audit-level=moderate
+      - run: npm run verify
+      - name: Require deployment role
+        env:
+          DEPLOY_ROLE: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+        run: test -n "$DEPLOY_ROLE"
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: us-east-2
+          allowed-account-ids: '738044534240'
+          role-session-name: PolySimProduction
+      - name: Check AWS account and OAuth parameter metadata
+        run: node scripts/deployment-preflight.mjs
+      - name: Review infrastructure diff in workflow log
+        run: npm run cdk:diff -- --method=template --fail-on=never
+      - name: Deploy application stacks
+        run: npm run cdk:deploy -- --require-approval never --outputs-file deployment-outputs.json
+      - name: Smoke test public gate and unauthenticated API
+        run: node scripts/smoke-production.mjs https://polysim.7028robotics.com

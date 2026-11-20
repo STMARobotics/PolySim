@@ -1,0 +1,20 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {generateKeyPairSync,createSign} from 'node:crypto';
+import {OAuth2Client} from 'google-auth-library';
+import {CertificateFormat} from 'google-auth-library/build/src/auth/oauth2client.js';
+import {verifyGoogleToken} from '../auth';
+import {config} from './support';
+test('real Google verification library validates RSA signatures and rejects tampering, wrong audience and unknown signing keys',async()=>{
+    const pair=generateKeyPairSync('rsa',{modulusLength:2048}),now=Math.floor(Date.now()/1000);
+    const client=new OAuth2Client(config.googleClientId);
+    client.getFederatedSignonCertsAsync=async()=>({certs:{test:pair.publicKey.export({type:'spki',format:'pem'}).toString()},format:CertificateFormat.PEM});
+    const payload={iss:'https://accounts.google.com',aud:config.googleClientId,sub:'user',email:'student@stmarobotics.org',email_verified:true,hd:'stmarobotics.org',nonce:'expected-nonce',iat:now,exp:now+3600};
+    const jwt=(p:object,kid='test')=>{const h=Buffer.from(JSON.stringify({alg:'RS256',typ:'JWT',kid})).toString('base64url'),b=Buffer.from(JSON.stringify(p)).toString('base64url'),input=h+'.'+b;return input+'.'+createSign('RSA-SHA256').update(input).sign(pair.privateKey).toString('base64url');};
+    const good=jwt(payload);assert.equal((await verifyGoogleToken(good,'expected-nonce',config,client)).sub,'user');
+    const segments=good.split('.');segments[1]=Buffer.from(JSON.stringify({...payload,sub:'attacker'})).toString('base64url');
+    await assert.rejects(()=>verifyGoogleToken(segments.join('.'),'expected-nonce',config,client));
+    await assert.rejects(()=>verifyGoogleToken(jwt({...payload,aud:'another-app'}),'expected-nonce',config,client));
+    await assert.rejects(()=>verifyGoogleToken(jwt(payload,'unknown'),'expected-nonce',config,client));
+    await assert.rejects(()=>verifyGoogleToken(jwt({...payload,exp:now-1000,iat:now-2000}),'expected-nonce',config,client));
+});

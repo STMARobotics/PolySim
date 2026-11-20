@@ -1,0 +1,27 @@
+import type { RobotDocument, Vec3 } from '../contracts/model';
+import { nodePosition } from './graph-model';
+export const NODE_WIDTH = 174, NODE_HEIGHT = 144;
+export function nextNodePosition(document: RobotDocument): [
+    number,
+    number
+] {
+    const occupied = [...Object.values(document.layout), ...[...document.subsystems, ...document.surfaces].map(n => nodePosition(document, n.id))];
+    for (let i = 0; i < 1000; i++) {
+        const x = 40 + (i % 4) * 240, y = 80 + Math.floor(i / 4) * 230 + (i % 2) * 35;
+        if (occupied.every(([ox, oy]) => Math.abs(x - ox) >= NODE_WIDTH + 28 || Math.abs(y - oy) >= NODE_HEIGHT + 28))
+            return [x, y];
+    }
+    return [40, Math.max(0, ...occupied.map(p => p[1])) + 230];
+}
+export function inventoryFraction(owned: number, capacity: number): number {
+    return capacity > 0 ? Math.max(0, Math.min(1, owned / capacity)) : 0;
+}
+export function fillBounds(height: number, owned: number, capacity: number): [
+    number,
+    number
+] {
+    return [-height / 2, -height / 2 + height * inventoryFraction(owned, capacity)];
+}
+export function resizedDimensions(size: Vec3, scale: Vec3): Vec3 {
+    return size.map((n, i) => Math.max(.05, Math.min(3, Math.round(n * scale[i] * 1000) / 1000))) as Vec3;
+}

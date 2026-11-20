@@ -1,0 +1,15 @@
+node_modules/
+dist/
+.DS_Store
+*.log
+coverage/
+
+dist-offline/
+cdk.out/
+work/
+.env
+.env.*
+!.env.example
+service/local-data/
+
+service-dist/

@@ -1,0 +1,11 @@
+import * as cdk from 'aws-cdk-lib';
+import { BackendStack, CertificateStack, FrontendStack } from '../lib/stacks';
+import {production} from '../lib/config';
+const app=new cdk.App();
+cdk.Tags.of(app).add('AppName','PolySim');
+cdk.Tags.of(app).add('Environment','production');
+const account=production.account, env={account,region:production.region};
+const edge=new CertificateStack(app,'polysim-certificate',{env:{account,region:'us-east-1'},crossRegionReferences:true});
+const backend=new BackendStack(app,'polysim-backend',{env,crossRegionReferences:true,adminSubjects:(process.env.POLYSIM_ADMIN_SUBJECTS ?? '').split(',').filter(Boolean)});
+new FrontendStack(app,'polysim-frontend',{env,crossRegionReferences:true,backend,edge});
+app.synth();

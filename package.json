@@ -1,0 +1,50 @@
+{
+  "name": "polysim",
+  "version": "0.8.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "tsc --noEmit && vite build && npm run build:backend",
+    "preview": "node scripts/serve.mjs",
+    "standalone": "npm run build:offline && node scripts/build-standalone.mjs",
+    "test": "tsx --test tests/*.test.ts",
+    "check": "tsc --noEmit",
+    "dev:offline": "vite --mode offline --host 127.0.0.1",
+    "build:offline": "tsc --noEmit && vite build --mode offline",
+    "service:local": "node --env-file-if-exists=service/.env --import tsx service/local-server.ts",
+    "test:backend": "tsx --test service/tests/*.test.ts",
+    "test:infra": "tsx --test cdk/tests/*.test.ts",
+    "cdk:synth": "cdk synth",
+    "cdk:diff": "cdk diff \"*\"",
+    "cdk:deploy": "cdk deploy --all",
+    "verify": "npm run check && npm test && npm run test:backend && npm run build && npm run test:infra && npm run cdk:synth",
+    "build:backend": "node scripts/build-backend.mjs",
+    "build:frontend": "vite build"
+  },
+  "dependencies": {
+    "@aws-sdk/client-dynamodb": "^3.1173.0",
+    "@aws-sdk/client-ssm": "^3.1173.0",
+    "@aws-sdk/client-sts": "^3.1173.0",
+    "@aws-sdk/lib-dynamodb": "^3.1173.0",
+    "@dimforge/rapier3d-compat": "^0.19.3",
+    "google-auth-library": "^11.3.4",
+    "three": "^0.181.1",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/aws-lambda": "^8.10.164",
+    "@types/node": "^24.10.0",
+    "@types/three": "^0.181.0",
+    "aws-cdk": "^2.1149.0",
+    "aws-cdk-lib": "2.277.0",
+    "constructs": "^10.8.1",
+    "esbuild": "^0.28.2",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3",
+    "vite": "^7.2.2"
+  }
+}
