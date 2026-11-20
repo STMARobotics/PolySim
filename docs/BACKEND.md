@@ -18,7 +18,7 @@ Reference: [STMARobotics/fmea-app](https://github.com/STMARobotics/fmea-app), in
 | Application URL | `https://polysim.7028robotics.com` |
 | Route 53 hosted zone | `Z014656337LGZWAE9JKJP` / `7028robotics.com` |
 | Google OAuth client | `574028865613-kh9gccmi9ccfqsv7s89rdttf7cc1ohj4.apps.googleusercontent.com` |
-| OAuth secret | SSM SecureString `/fmea/google-client-secret`, `us-east-2` |
+| OAuth secret | SSM SecureString `/polysim/google-client-secret`, `us-east-2` |
 | Authorized Workspace domain | `stmarobotics.org` |
 
 PolySim does not access FMEA records or share its session cookie. Rotating the shared OAuth secret affects both apps; coordinate that change. The secret is cached by the auth Lambda for at most five minutes. No secret is stored in source, CDK context, frontend configuration or deployment outputs.
@@ -75,7 +75,7 @@ The root package contains three stacks: `polysim-certificate`, `polysim-backend`
 
 1. In the existing Google OAuth web client, verify/add the exact redirect URI `https://polysim.7028robotics.com/api/auth/callback`. Keep FMEA's redirect URIs intact. Verify the client remains restricted appropriately to the organization. PolySim always applies its own server-side hosted-domain check.
 2. Authenticate AWS access to account `738044534240`. Both regions must have the CDK bootstrap resources. If absent, an administrator must review and run `npx cdk bootstrap aws://738044534240/us-east-1 aws://738044534240/us-east-2` using the organization's deployment policies.
-3. Run `npm ci`, `npm run verify`, and `node scripts/deployment-preflight.mjs`. Preflight checks account identity and SecureString metadata without fetching/printing the decrypted value. Its caller needs `sts:GetCallerIdentity` and `ssm:DescribeParameters`; the deployed auth role separately needs the exact parameter's GetParameter/KMS permissions.
+3. Run `npm ci`, `npm run verify`, and `node scripts/deployment-preflight.mjs`. Preflight checks account identity and SecureString metadata without fetching/printing the decrypted value. Its caller needs `sts:GetCallerIdentity` and `ssm:GetParameter` for the exact parameter ARN; the deployed auth role separately needs the exact parameter's GetParameter/KMS permissions.
 4. Review `npm run cdk:diff`. Then run `npm run cdk:deploy`. CloudFormation creates billable WAF, CloudFront, API, Lambda, DynamoDB, backup, logs and SNS resources.
 5. Run `node scripts/smoke-production.mjs https://polysim.7028robotics.com`. It checks public gate headers, 401s for unauthenticated APIs and PKCE login redirect/cookie configuration. It does not perform a Google login or verify the authorized redirect registration.
 6. Complete the real-user release checks below and subscribe the operations team to the SNS topic emitted in the backend outputs. Verify delivery with an approved test notification before opening access.

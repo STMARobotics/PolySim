@@ -62,3 +62,9 @@ test('one deployment workflow uses FMEA-style gates and no variables, secrets or
     assert.doesNotMatch(workflow,/\$\{\{\s*(vars|secrets)\./);assert.doesNotMatch(workflow,/uses: [^@\n]+@[0-9a-f]{40}/);
     assert.doesNotMatch(workflow,/workflow_dispatch/);
 });
+test('deployment preflight uses exact-name parameter metadata access',()=>{
+    const preflight=readFileSync('scripts/deployment-preflight.mjs','utf8');
+    assert.match(preflight,/GetParameterCommand/);
+    assert.match(preflight,/WithDecryption:false/);
+    assert.doesNotMatch(preflight,/DescribeParametersCommand/);
+});
