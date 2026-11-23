@@ -7,6 +7,22 @@ import {TARGETING_MODES} from '../../contracts/targeting';
 import {fixture,request} from './support';
 const key=()=>({'idempotency-key':randomUUID()});
 
+test('only the creator can revise a robot; other members can drive and duplicate it',async()=>{
+    const f=fixture(),owner=await f.login(),other=await f.login('other-sub'),admin=await f.login('admin-sub'),document=sampleRobot();
+    assert.equal((await f.app.handle(request('/api/robots','POST',{document},{...owner,...key()}))).statusCode,201);
+    const path=`/api/robots/${document.id}`;
+    const read=await f.app.handle(request(path,'GET',undefined,other));
+    assert.equal(read.statusCode,200);
+    assert.equal(JSON.parse(read.body).metadata.creatorName,'Member');
+    for(const session of [other,admin])assert.equal((await f.app.handle(request(path+'/revisions','POST',{document:{...document,name:'Changed'},expectedRevision:1},{...session,...key()}))).statusCode,403);
+    const copy={...JSON.parse(read.body).document,id:randomUUID(),name:'My copy',revision:0};
+    assert.equal((await f.app.handle(request('/api/robots','POST',{document:copy},{...other,...key()}))).statusCode,201);
+    assert.equal(JSON.parse((await f.app.handle(request(`/api/robots/${copy.id}`,'GET',undefined,other))).body).metadata.createdBy,'other-sub');
+    assert.equal((await f.app.handle(request(path+'/revisions','POST',{document:{...document,name:'Owner edit'},expectedRevision:1},{...owner,...key()}))).statusCode,200);
+    const list=JSON.parse((await f.app.handle(request('/api/robots','GET',undefined,other))).body);
+    assert.equal(list.items.find((r:{id:string})=>r.id===document.id).creatorName,'Member');
+});
+
 test('authenticated API advertises targeting and round-trips all targeting modes and ranges',async()=>{
     const f=fixture(),session=await f.login();
     const manifest=await f.app.handle(request('/api/seasons/practice-balls','GET',undefined,session));

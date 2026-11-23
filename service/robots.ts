@@ -76,11 +76,12 @@ export class Robots {
         };
         const prior=await previous();if(prior)return prior;
         const meta=existingId?await this.metadata(id):undefined;
+        if(meta && meta.createdBy!==user.sub)throw new HttpError(403,'OWNER_REQUIRED','Only the creator can edit this robot. Duplicate it to make your own copy.');
         if(meta && (meta.revision!==expected || meta.archived))throw new HttpError(409,'REVISION_CONFLICT','Robot changed or was archived. Your local draft is preserved.',{currentRevision:meta.revision,archived:meta.archived});
         const revision=Number(expected)+1, now=new Date().toISOString(), document={...input.document,revision};
         if(meta && meta.seasonId!==document.seasonId)throw new HttpError(422,'SEASON_IMMUTABLE','Duplicate a robot to change its season.');
         const record: Item={pk,sk:revKey(revision),document,revision,author:user.sub,created:now,issues:input.issues,runnable:input.runnable};
-        const metadata: Item={pk,sk:'METADATA',id,name:document.name,seasonId:document.seasonId,revision,archived:false,created:meta?.created ?? now,createdBy:meta?.createdBy ?? user.sub,updated:now,updatedBy:user.sub,subsystems:document.subsystems.length,connections:document.edges.length,runnable:input.runnable,gsi1pk:this.listPK(document.seasonId),gsi1sk:now+'#'+id};
+        const metadata: Item={pk,sk:'METADATA',id,name:document.name,seasonId:document.seasonId,revision,archived:false,created:meta?.created ?? now,createdBy:meta?.createdBy ?? user.sub,creatorName:meta?.creatorName ?? user.name,updated:now,updatedBy:user.sub,subsystems:document.subsystems.length,connections:document.edges.length,runnable:input.runnable,gsi1pk:this.listPK(document.seasonId),gsi1sk:now+'#'+id};
         const writes: Write[]=[
             {table:this.config.dataTable,item:record,condition:{absent:true}},
             {table:this.config.dataTable,item:metadata,condition:meta?{equals:{revision:expected,archived:false}}:{absent:true}},

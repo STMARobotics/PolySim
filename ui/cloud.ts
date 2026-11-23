@@ -3,7 +3,7 @@ import { parseDocument } from '../contracts/model';
 import {DEFAULT_TARGETING_FREEDOM} from '../contracts/targeting';
 import {pieceTypesFor} from '../seasons/registry';
 export interface Identity {user:{sub:string;email:string;name:string;role:'member'|'admin'};csrfToken:string;expiresAt:string}
-export interface RobotSummary {id:string;name:string;revision:number;seasonId:string;updated:string;subsystems:number;connections:number;runnable:boolean}
+export interface RobotSummary {id:string;name:string;revision:number;seasonId:string;updated:string;createdBy:string;creatorName?:string;subsystems:number;connections:number;runnable:boolean}
 export class ApiError extends Error {constructor(public status:number,public code:string,message:string) {super(message);}}
 let identity: Identity|undefined;
 let supportsPiecePhysics=false;
@@ -23,7 +23,8 @@ export async function api<T>(path: string, options: RequestInit={}):Promise<T> {
     return result.status===204?undefined as T:result.json();
 }
 export const cloudLibrary=(cursor?:string,seasonId='practice-balls')=>api<{items:RobotSummary[];cursor?:string}>('/robots?limit=20&seasonId='+encodeURIComponent(seasonId)+(cursor?'&cursor='+encodeURIComponent(cursor):''));
-export async function cloudRobot(id:string) {const row=await api<{document:RobotDocument}>('/robots/'+encodeURIComponent(id));return parseDocument(row.document);}
+export const robotMetadata = new Map<string, RobotSummary>();
+export async function cloudRobot(id:string) {const row=await api<{document:RobotDocument;metadata:RobotSummary}>('/robots/'+encodeURIComponent(id));robotMetadata.set(id,row.metadata);return parseDocument(row.document);}
 const savedRevisions=new Map<string,number>();
 export function trackRevision(id:string, revision:number) {savedRevisions.set(id,revision);}
 export const sharedRevision=(id:string)=>savedRevisions.get(id);
