@@ -7,6 +7,21 @@ import {TARGETING_MODES} from '../../contracts/targeting';
 import {fixture,request} from './support';
 const key=()=>({'idempotency-key':randomUUID()});
 
+test('custom graph routes and gamepad bindings survive API save and reload in both graphs',async()=>{
+    const f=fixture(),session=await f.login(),document=ensureStates(sampleRobot()),route:[number,number][]=[[240,-96],[576,-96]];
+    document.edges[0].route=route;document.edges[0].key='gamepad:button:6';
+    const sub=document.subsystems[0],state=addState(document,sub,sub.states![0]);
+    sub.stateTransitions!.push({id:'pad-transition',source:sub.states![0].id,target:state.id,duration:0,key:'gamepad:axis:1:-',trigger:'press',route});
+    const manifest=JSON.parse((await f.app.handle(request('/api/seasons/practice-balls','GET',undefined,session))).body);
+    assert.ok(manifest.capabilities.includes('graph-routes'));assert.ok(manifest.capabilities.includes('gamepad-bindings'));
+    const created=await f.app.handle(request('/api/robots','POST',{document},{...session,...key()}));assert.equal(created.statusCode,201);
+    const saved=JSON.parse((await f.app.handle(request('/api/robots/'+document.id,'GET',undefined,session))).body).document;
+    assert.deepEqual(saved.edges[0].route,route);assert.equal(saved.edges[0].key,'gamepad:button:6');
+    assert.deepEqual(saved.subsystems[0].stateTransitions[0].route,route);assert.equal(saved.subsystems[0].stateTransitions[0].key,'gamepad:axis:1:-');
+    const bad={...document,id:randomUUID(),edges:document.edges.map(e=>({...e,route:[[10000,0]]}))};
+    assert.equal((await f.app.handle(request('/api/robots','POST',{document:bad},{...session,...key()}))).statusCode,422);
+});
+
 test('only the creator can revise a robot; other members can drive and duplicate it',async()=>{
     const f=fixture(),owner=await f.login(),other=await f.login('other-sub'),admin=await f.login('admin-sub'),document=sampleRobot();
     assert.equal((await f.app.handle(request('/api/robots','POST',{document},{...owner,...key()}))).statusCode,201);

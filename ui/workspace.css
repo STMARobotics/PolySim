@@ -369,3 +369,14 @@ dialog.library-dialog{width:1440px;max-width:94vw;height:88vh;max-height:94vh}
 .library-dialog .card-footer{padding-top:10px;flex-wrap:wrap;gap:8px}
 .library-empty{padding:40px 0;color:#c9ddf6}
 @media(max-width:600px){.library-dialog .modal-body{padding:16px}.library-header{flex-wrap:wrap}.library-dialog .library-grid{grid-template-columns:1fr}}
+/* Grid routes expose segment handles only for the selected connection. */
+.graph-svg{touch-action:none}
+.graph-edge .edge-hit,.graph-edge>rect{cursor:move}
+.graph-edge .route-segment{fill:none;stroke:#ffe044;stroke-width:9;stroke-opacity:.25;cursor:move;pointer-events:stroke}
+.graph-edge .route-segment:hover{stroke-opacity:.7}
+.graph-edge .route-reset{fill:#ffe044!important;font-size:11px!important;cursor:pointer;pointer-events:auto!important;text-decoration:underline}
+.graph-edge.route-blocked .edge-line{stroke-dasharray:4 4}
+#action-controls{overflow-x:auto;min-width:0}
+.action-control{flex-shrink:0}
+.graph-edge .edge-label-leader{fill:none;stroke:#8ba9c9;stroke-width:1;stroke-dasharray:3 3;pointer-events:none}
+.graph-edge .route-handle{fill:#ffe044;stroke:#152b45;stroke-width:1;cursor:move;pointer-events:all}

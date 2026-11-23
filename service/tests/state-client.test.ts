@@ -5,6 +5,13 @@ import {ensureStates} from '../../contracts/states';
 import {addState} from '../../contracts/states';
 import {sampleRobot} from '../../seasons/practice';
 import {TARGETING_MODES} from '../../contracts/targeting';
+
+test('custom routes and gamepad bindings refuse older servers before any write',async context=>{
+    const session={user:{sub:'test',email:'test@stmarobotics.org',name:'Test',role:'member' as const},csrfToken:'test',expiresAt:'2099-01-01'},doc=ensureStates(sampleRobot());let writes=0;
+    context.mock.method(globalThis,'fetch',async(path:string)=>{if(!path.includes('/seasons/'))writes++;return new Response(JSON.stringify({capabilities:['subsystem-states']}),{status:200});});
+    configureCloud(session);doc.edges[0].route=[[240,-96],[528,-96]];await assert.rejects(()=>saveShared(doc),/graph routing update/);
+    delete doc.edges[0].route;doc.edges[0].key='gamepad:button:0';configureCloud(session);await assert.rejects(()=>saveShared(doc),/gamepad update/);assert.equal(writes,0);
+});
 test('state saves refuse an older server instead of silently losing state definitions',async context=>{
     configureCloud({user:{sub:'test',email:'test@stmarobotics.org',name:'Test',role:'member'},csrfToken:'test',expiresAt:'2099-01-01'});
     const calls:string[]=[];

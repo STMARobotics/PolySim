@@ -23,7 +23,7 @@ import { nextNodePosition } from './editor-model';
 import type { DriverStation } from './camera-model';
 import { SimulationClient } from '../simulation/client';
 import { displayValue, storedValue, displayIssue, propertyStep, inchProperty, inchInputLimits } from './units';
-import { keyboardDrive } from './drive-controls';
+import { keyboardDrive, gamepadControls, gamepadHeldBindings, driveBindings } from './drive-controls';
 if (cloudEnabled()) for (const [id, revision] of Object.entries(readCloudRevisions())) trackRevision(id, revision);
 let saving = false;
 let doc = snapDocumentInches(ensureStates(readDraft() ?? createSeasonRobot('reefscape-2025'))), selected = doc.id, selectedFace: Face = '+X';
@@ -168,7 +168,7 @@ const graph = new GraphView($('#graph'), selectGraph, (which,p)=>commit(d=>{if(g
     const sub=doc.subsystems.find(s=>s.id===stateOwner);if(!sub||a===b||!sub.states!.some(s=>s.id===a)||!sub.states!.some(s=>s.id===b))return;
     if(sub.stateTransitions!.some(e=>e.source===a&&e.target===b)){toast('That state transition already exists.');return;}
     commit(d=>{const edge={id:id(),source:a,target:b,duration:.5,key:'u',trigger:'press' as const};d.subsystems.find(s=>s.id===stateOwner)!.stateTransitions!.push(edge);stateEdgeSelection=edge.id;selected=stateOwner;});
-}, which=>{selectGraph(which);setPropertiesVisible(true);});
+}, which=>{selectGraph(which);setPropertiesVisible(true);},(which,route)=>commit(d=>{const edges=graphMode==='travel'?d.edges:d.subsystems.find(s=>s.id===stateOwner)!.stateTransitions!;const edge=edges.find(e=>e.id===which);if(edge){if(route)edge.route=route;else delete edge.route;if(graphMode==='travel')selected=which;else stateEdgeSelection=which;}}));
 
 new ActionBeam(root,()=>mode==='edit'&&activeView==='edit',(x,y)=>viewport?.actionTarget(x,y,(owner,face)=>{
     if(inspectorScope==='field'){const goal=doc.field!.scoringElements.find(g=>g.id===owner);return !!goal&&!goal.surfaces.some(s=>s.faces.includes(face));}
@@ -322,8 +322,8 @@ function renderShell() {
     $('#field-selection').textContent = activeView === 'drive' || nodeName(doc, selected) === 'Missing node' ? '' : nodeName(doc, selected);
     $('#graph-selection').textContent = [...doc.subsystems, ...doc.surfaces, ...doc.edges].some(n => n.id === selected) ? (doc.edges.some(e => e.id === selected) ? 'Connection' : nodeName(doc, selected)) : '';
     document.querySelectorAll<HTMLElement>('[data-action^="transform:"]').forEach(b => b.classList.toggle('active', b.dataset.action === 'transform:' + transformMode));
-    const actions = [...new Set([...doc.edges,...doc.subsystems.flatMap(s=>s.stateTransitions ?? [])].map(e => normalizeBinding(e.key)!))];
-    $('#action-controls').innerHTML = actions.map(k => `<button class="action-control" data-hold="${esc(k)}" ${mode === 'edit' || isReplay ? 'disabled' : ''}><kbd>${esc(bindingLabel(k))}</kbd>${esc((doc.edges.find(e=>normalizeBinding(e.key)===k) ? surfaceForEdge(doc,doc.edges.find(e=>normalizeBinding(e.key)===k)!)?.type ?? 'Transfer' : 'State'))}</button>`).join('');
+    const actions = driveBindings(doc);
+    $('#action-controls').innerHTML = actions.map(({key,label}) => `<button class="action-control" data-hold="${esc(key)}" ${mode === 'edit' || isReplay ? 'disabled' : ''}><kbd>${esc(bindingLabel(key))}</kbd>${esc(label)}</button>`).join('');
     $('#action-controls').querySelectorAll<HTMLButtonElement>('[data-hold]').forEach(b => {
         b.addEventListener('pointerdown', e => { virtual.add(b.dataset.hold!); b.setPointerCapture(e.pointerId); b.classList.add('held'); sendControls(); });
         const release = () => { virtual.delete(b.dataset.hold!); b.classList.remove('held'); sendControls(); };
@@ -343,7 +343,7 @@ function renderTree() {
     $('[data-select="robot"]').classList.toggle('selected', selected === doc.id);
     $('#tree').innerHTML = subsystemTree(doc).map(({subsystem:sub,states})=>`<div class="tree-group"><button class="tree-row ${selected===sub.id?'selected':''}" data-select="${esc(sub.id)}"><span class="cube-icon">◇</span><span>${esc(sub.name)}</span><small>${sub.capacity}</small></button>${states.map(({state,actions})=>`<div class="tree-state-group"><button class="tree-state ${selected===sub.id&&openStates[sub.id]===state.id?'selected':''}" data-select="${esc(state.id)}" aria-label="${esc(sub.name+' / '+state.name)}"><span class="state-marker">${state.isDefault?'●':'◇'}</span><span>${esc(state.name)}</span></button>${actions.map(action=>`<button class="tree-surface tree-action ${selected===action.id?'selected':''}" data-select="${esc(action.id)}" aria-label="${esc(sub.name+' / '+state.name+' / '+action.name)}"><i class="swatch ${action.type}"></i><span>${esc(action.name)}</span></button>`).join('')}</div>`).join('')}</div>`).join('');
 }
-const bindingField = (path: string, value: string) => `<label class="field"><span>Key</span><button type="button" aria-label="Key binding ${esc(bindingLabel(value))}" title="Click, then press a key" class="binding-capture ${capturingBinding?.id === selected && capturingBinding.path === path ? 'recording' : ''}" data-bind="${path}" ${mode !== 'edit' ? 'disabled' : ''}>${capturingBinding?.id === selected && capturingBinding.path === path ? 'Press a key…' : esc(bindingLabel(value))}</button></label>`;
+const bindingField = (path: string, value: string) => `<label class="field"><span>Key</span><button type="button" aria-label="Key binding ${esc(bindingLabel(value))}" title="Click, then press a keyboard key or gamepad control" class="binding-capture ${capturingBinding?.id === selected && capturingBinding.path === path ? 'recording' : ''}" data-bind="${path}" ${mode !== 'edit' ? 'disabled' : ''}>${capturingBinding?.id === selected && capturingBinding.path === path ? 'Press a key or gamepad control…' : esc(bindingLabel(value))}</button></label>`;
 const field = (label: string, key: string, value: string | number, type = 'number', step = '0.01', help = '') => `<label class="field"><span>${label}</span><input data-field="${key}" type="${type}" value="${esc(typeof value === 'number' ? displayValue(key, value) : value)}" step="${propertyStep(key,step)}" ${key==='sub.targetingFreedom'?'min="0" max="360"':inchProperty(key)?inchInputLimits(key):''} ${mode !== 'edit' ? 'disabled' : ''} />${help ? `<small>${help}</small>` : ''}</label>`;
 const dropdown = (label: string, key: string, value: string, options: [
     string,
@@ -556,7 +556,7 @@ function showResults() {
     $('[data-action="run-json"]').addEventListener('click', () => download('polysim-run.json', JSON.stringify(runs[Number($<HTMLSelectElement>('#compare-a').value)], null, 2)));
 }
 function exportCSV(run: SavedRun) { download('polysim-metrics.csv', metricsCSV(run), 'text/csv'); }
-function help() { modal(modalHead('HELP', 'PolySim') + `<div class="modal-body help-body"><div class="help-steps"><div><h3>Edit</h3><p>Select a box and drag its Move or Resize handles. The right inspector contains dimensions, capacity, faces and bindings. Hide expands the editor; Inspector restores the pane.</p></div><div><h3>Graph</h3><p>Drag from an output port onto a destination. Select any module or connection to edit it in the right inspector.</p></div><div><h3>Drive</h3><p>Choose driver station 1, 2 or 3. The camera stays behind the station and smoothly tracks the robot. WASD moves; left/right arrows rotate. Opening Drive starts play automatically. Leaving Drive pauses play.</p></div></div><p>Click a key binding, then press the desired key. Space, Shift and Enter are supported. Yellow fills each box from the bottom according to owned inventory and capacity.</p><p>Save keeps robots in this browser. Export creates a JSON backup.</p><details class="event-details"><summary>Model limits</summary><p>Estimated practice fixture. No official FRC rules, drag, traction, tipping, articulated mechanisms or cloud sharing. Full assumptions appear in Results and the offline documentation.</p></details>${button('close', 'Close', 'primary')}</div>`); }
+function help() { modal(modalHead('HELP', 'PolySim') + `<div class="modal-body help-body"><div class="help-steps"><div><h3>Edit</h3><p>Select a box and drag its Move or Resize handles. The right inspector contains dimensions, capacity, faces and bindings. Hide expands the editor; Inspector restores the pane.</p></div><div><h3>Graph</h3><p>Nodes snap to the dot grid. Drag from an output port onto a destination. Select a connection and drag its highlighted segments to organize the route; Reset route restores automatic routing. Select any module or connection to edit it in the inspector.</p></div><div><h3>Drive</h3><p>Choose driver station 1, 2 or 3. The camera stays behind the station and smoothly tracks the robot. WASD moves; left/right arrows rotate. Opening Drive starts play automatically. Leaving Drive pauses play.</p></div></div><p>Click a key binding, then press a keyboard key, gamepad button, trigger, or stick direction. Gamepad labels use the standard controller layout. Yellow fills each box from the bottom according to owned inventory and capacity.</p><p>Save keeps robots in this browser. Export creates a JSON backup.</p><details class="event-details"><summary>Model limits</summary><p>Estimated practice fixture. No official FRC rules, drag, traction, tipping, articulated mechanisms or cloud sharing. Full assumptions appear in Results and the offline documentation.</p></details>${button('close', 'Close', 'primary')}</div>`); }
 function removeSelected() {
     if(inspectorScope==='field'){$('#inspector').querySelector<HTMLButtonElement>('[data-action="field:delete"]')?.click();return;}
     const edge = doc.edges.find(e => e.id === selected);
@@ -575,16 +575,16 @@ function removeSelected() {
     });
     toast(`${sub ? 'Subsystem' : surface ? 'Surface' : 'Connection'} removed${affected ? ' with ' + affected + ' connected edges' : ''}. Undo restores the whole edit.`);
 }
-function sendControls(gamepad?: {
-    x: number;
-    y: number;
-    turn: number;
-    held: string[];
-}) {
+let padControls=gamepadControls();
+function captureKey(key:string){
+    const capture=capturingBinding;if(!capture)return;capturingBinding=undefined;
+    commit(d=>{const item=capture.path==='stateEdge.key'?d.subsystems.find(s=>s.id===capture.id)?.stateTransitions?.find(e=>e.id===stateEdgeSelection):d.edges.find(e=>e.id===capture.id);if(item)item.key=key;});
+}
+function sendControls() {
     if (mode === 'edit' || isReplay || !workerReady)
         return;
     const {x, y, turn} = keyboardDrive(keys);
-    const input: Controls = { x: gamepad?.x || x, y: gamepad?.y || y, turn: gamepad?.turn || turn, held: [...new Set([...keys, ...virtual, ...gamepad?.held ?? []])].filter(k => !!normalizeBinding(k)).sort() };
+    const input: Controls = { x: padControls.x || x, y: padControls.y || y, turn: padControls.turn || turn, held: [...new Set([...keys, ...virtual, ...gamepadHeldBindings(doc,padControls.held)])].filter(k => !!normalizeBinding(k)).sort() };
     send({ type: 'controls', controls: input });
 }
 document.addEventListener('click', async e => {
@@ -863,15 +863,8 @@ window.addEventListener('keydown', e => {
     if (capturingBinding) {
         e.preventDefault();
         e.stopImmediatePropagation();
-        const key = normalizeBinding(e.key) ?? normalizeBinding(e.code), capture = capturingBinding;
-        if (!key)
-            return;
-        capturingBinding = undefined;
-        commit(d => {
-            const item = capture.path==='stateEdge.key' ? d.subsystems.find(s=>s.id===capture.id)?.stateTransitions?.find(e=>e.id===stateEdgeSelection) : d.edges.find(s => s.id === capture.id);
-            if (item)
-                item.key = key;
-        });
+        const key=normalizeBinding(e.key)??normalizeBinding(e.code);
+        if(key)captureKey(key);
         return;
     }
     const editing = (e.target as Element).matches('input,select,textarea,[contenteditable="true"]') || $<HTMLDialogElement>('#modal').open;
@@ -907,6 +900,7 @@ window.addEventListener('keyup', e => {
     sendControls();
 });
 function loseFocus() {
+    padControls=gamepadControls();
     keys.clear();
     virtual.clear();
     if (workerReady) send({ type: 'controls', controls: { x: 0, y: 0, turn: 0, held: [] } });
@@ -923,15 +917,15 @@ document.addEventListener('visibilitychange', () => {
     if (document.hidden) loseFocus();
     else if (activeView === 'drive' && !$<HTMLDialogElement>('#modal').open) resumeDrive();
 });
-setInterval(() => {
-    if (mode !== 'running' || isReplay)
-        return;
-    const pad = Array.from(navigator.getGamepads?.() ?? []).find(p => p?.connected);
-    if (!pad)
-        return;
-    const axis = (i: number) => Math.abs(pad.axes[i] ?? 0) > .15 ? pad.axes[i] : 0;
-    sendControls({ x: -axis(1), y: -axis(0), turn: -axis(2), held: ['i', 'j', 'k'].filter((_, i) => pad.buttons[i]?.pressed) });
-}, 33);
+let previousPadHeld=new Set<string>();
+setInterval(()=>{
+    const pad=Array.from(navigator.getGamepads?.()??[]).find(p=>p?.connected);
+    const previous=padControls;padControls=gamepadControls(document.hidden||!document.hasFocus()?undefined:pad);
+    const rising=padControls.held.find(key=>!previousPadHeld.has(key));
+    previousPadHeld=new Set(padControls.held);
+    if(capturingBinding && rising)captureKey(rising);
+    if(mode==='running' && !isReplay && (pad||previous.held.length||previous.x||previous.y||previous.turn))sendControls();
+},33);
 window.addEventListener('gamepaddisconnected', loseFocus);
 render();
 requestAnimationFrame(() => graph.fit());
