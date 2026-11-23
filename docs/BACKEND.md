@@ -2,7 +2,7 @@
 
 ## Release status
 
-The backend, authenticated frontend integration and CDK source are implemented. Local tests, browser QA and credential-free synthesis do not establish that a production deployment works. This workspace has no AWS credentials. AWS deployment, the actual shared Google OAuth client redirect registration, a real allowed/disallowed-account login test, DynamoDB integration, alarms and restore verification remain live release gates. Do not call the service production-verified until those checks pass.
+The backend, authenticated frontend integration and CDK source are implemented. Local tests, browser QA and credential-free synthesis do not establish that a production deployment works. This workspace has no AWS credentials. AWS deployment, the actual shared Google OAuth client redirect registration, a real allowed/disallowed-account login test, DynamoDB integration and restore verification remain live release gates. Do not call the service production-verified until those checks pass.
 
 The current scope is authentication, developer-published season manifests and team-wide robot CRUD through immutable revisions. All approved domain members can read and edit shared robots. Archive/restore is restricted to explicitly configured Google subject IDs. Scenario persistence, cloud run summaries and large replay artifacts are not implemented; existing run reports remain local. Physics continues in the browser and is never run in Lambda.
 
@@ -76,9 +76,9 @@ The root package contains three stacks: `polysim-certificate`, `polysim-backend`
 1. In the existing Google OAuth web client, verify/add the exact redirect URI `https://polysim.7028robotics.com/api/auth/callback`. Keep FMEA's redirect URIs intact. Verify the client remains restricted appropriately to the organization. PolySim always applies its own server-side hosted-domain check.
 2. Authenticate AWS access to account `738044534240`. Both regions must have the CDK bootstrap resources. If absent, an administrator must review and run `npx cdk bootstrap aws://738044534240/us-east-1 aws://738044534240/us-east-2` using the organization's deployment policies.
 3. Run `npm ci`, `npm run verify`, and `node scripts/deployment-preflight.mjs`. Preflight checks only the AWS account and region using `sts:GetCallerIdentity`; it does not request the OAuth secret. The deployed auth role separately needs exact-parameter `ssm:GetParameter` and KMS permissions.
-4. Review `npm run cdk:diff`. Then run `npm run cdk:deploy`. CloudFormation creates billable CloudFront, API, Lambda, DynamoDB, logs and SNS resources. PITR and AWS Backup are not created.
+4. Review `npm run cdk:diff`. Then run `npm run cdk:deploy`. CloudFormation creates billable CloudFront, API, Lambda, DynamoDB and logs resources. PITR, AWS Backup, CloudWatch alarms, SNS and API Gateway detailed metrics are not created.
 5. Run `node scripts/smoke-production.mjs https://polysim.7028robotics.com`. It checks public gate headers, 401s for unauthenticated APIs and PKCE login redirect/cookie configuration. It does not perform a Google login or verify the authorized redirect registration.
-6. Complete the real-user release checks below and subscribe the operations team to the SNS topic emitted in the backend outputs. Verify delivery with an approved test notification before opening access.
+6. Complete the real-user release checks below before opening access.
 
 The single `.github/workflows/deploy.yml` workflow matches FMEA's triggers and gates: pushes to every branch and pull requests run validation, pull requests configure the read-only `GitHubAction-PullRequestRole` and run `cdk diff`, and only pushes to `main` build/test/synthesize and deploy with `GitHubAction-AssumeRoleWithAction`. Both role ARNs are checked into the workflow; there are no GitHub repository variables, secrets, or action commit SHA pins. Deployment is automatic only for `main`; branch builds never receive the deployment role. Add AWS IAM trust/policy for the two existing FMEA OIDC roles only if they are not already authorized for `STMARobotics/PolySim`.
 
@@ -96,7 +96,7 @@ Local browser QA used a synthetic Google provider in an ignored, loopback-only t
 
 ## Operations, recovery and remaining release gates
 
-Both tables have AWS-managed encryption, deletion protection and retain-on-delete/update-replacement. DynamoDB Point-in-Time Recovery (PITR) and AWS Backup are intentionally disabled to minimize fixed and ongoing cost. Frontend S3 is private, versioned and retained with noncurrent versions cleaned after 30 days. Application logs retain one month; API access logs record route keys rather than OAuth query strings. Lambda errors, throttling and high duration plus API 5xx alarms publish to the operations SNS topic. Subscribe operators and verify notifications; creating an unsubscribed topic is not a complete paging setup.
+Both tables have AWS-managed encryption, deletion protection and retain-on-delete/update-replacement. DynamoDB Point-in-Time Recovery (PITR) and AWS Backup are intentionally disabled to minimize fixed and ongoing cost. Frontend S3 is private, versioned and retained with noncurrent versions cleaned after 30 days. Application and API access logs retain seven days. API access logs record route keys rather than OAuth query strings. CloudWatch alarms, SNS topics, API Gateway detailed metrics and backup infrastructure are intentionally omitted because this is a low-priority application.
 
 Backup cost background: DynamoDB PITR generally costs about $0.20 per GB-month for continuously restored storage in common US regions, with no fixed setup fee and a restore needed for recovery. AWS Backup DynamoDB storage is typically about $0.10 per GB-month for incremental backups, plus restore usage (commonly about $0.15 per GB) and any cross-region transfer. Rates vary by region, backup mode and current AWS pricing, so check the AWS console pricing calculator before enabling either. The 35-day AWS Backup plan previously configured here has no fixed vault fee, but it incurs monthly backup storage and can grow as retained robot revisions grow. PITR and AWS Backup are separate: no PITR means no automatic 35-day second-granularity restore window; no AWS Backup means no independent recovery points.
 
@@ -110,7 +110,7 @@ Release gates still requiring actual AWS/Google access:
 - Complete allowed Workspace login; reject personal Gmail, another Workspace and an email-domain lookalike; check logout/revocation and session expiry.
 - Save/reopen on a second account/device, force a live concurrent revision conflict and retry an ambiguous save. Verify existing immutable revisions remain intact.
 - Confirm DynamoDB transaction/IAM behavior, CloudFront cookies/no-store behavior, CSP including the worker, Route 53 and ACM validation.
-- Subscribe/test operational alerts and complete/record a backup restore drill.
+- Complete/record a backup restore drill if an approved backup service is later enabled.
 - Review dependency advisories and deployment diff; verify costs, quota headroom and the approved admin subject list.
 
 Dependency audit for the integrated 0.16.1 release: both `npm audit --omit=dev --audit-level=moderate` and `npm audit --audit-level=moderate` report zero advisories after a fresh install. The concurrent main update to CDK 2.278.0 resolves the earlier bundled minimatch finding. Repeat both audits for subsequent releases; these results describe this checked lockfile and the advisory data available on November 20, 2026.

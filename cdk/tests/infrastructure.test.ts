@@ -41,12 +41,17 @@ test('CloudFront keeps the bucket private and never caches auth or API responses
     f.hasResourceProperties('AWS::CloudFront::ResponseHeadersPolicy',{ResponseHeadersPolicyConfig:{SecurityHeadersConfig:Match.objectLike({ContentSecurityPolicy:Match.objectLike({Override:true}),FrameOptions:{FrameOption:'DENY',Override:true}})}});
     assert.equal(Object.keys(e.findResources('AWS::WAFv2::WebACL')).length,0);
 });
-test('focused API routes cover auth, versioned robot storage and read-only seasons with logging and alarms',()=>{
+test('focused API routes cover auth, versioned robot storage and read-only seasons with cost-minimized logging',()=>{
     const routes=Object.values(b.findResources('AWS::ApiGatewayV2::Route')).map(r=>r.Properties.RouteKey);
     assert.ok(routes.includes('POST /api/robots/{robotId}/revisions'));assert.ok(routes.includes('POST /api/auth/logout'));
     assert.ok(!routes.some((r:string)=>r.startsWith('DELETE ')));assert.ok(!routes.some((r:string)=>r.startsWith('POST /api/seasons')));
     b.hasResourceProperties('AWS::ApiGatewayV2::Stage',{AccessLogSettings:Match.objectLike({Format:Match.stringLikeRegexp('requestId')})});
-    assert.ok(Object.keys(b.findResources('AWS::CloudWatch::Alarm')).length>=10);
+    assert.equal(Object.keys(b.findResources('AWS::CloudWatch::Alarm')).length,0);
+    assert.equal(Object.keys(b.findResources('AWS::SNS::Topic')).length,0);
+    assert.equal(Object.keys(b.findResources('AWS::SNS::Subscription')).length,0);
+    const stage=Object.values(b.findResources('AWS::ApiGatewayV2::Stage'))[0].Properties;
+    assert.equal(stage.DefaultRouteSettings.DetailedMetricsEnabled,false);
+    for(const group of Object.values(b.findResources('AWS::Logs::LogGroup')))assert.equal(group.Properties.RetentionInDays,7);
 });
 test('production entry is the login gate and lazy-loads the editor only after authentication',()=>{
     const html=readFileSync('dist/index.html','utf8'), entry=html.match(/src="([^\"]+\.js)"/)![1];

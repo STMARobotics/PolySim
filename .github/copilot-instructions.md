@@ -2,8 +2,8 @@
 
 ## AWS cost policy
 
-- Minimize AWS cost and fixed monthly charges. This is a high-priority requirement, not a default optimization.
-- Do not add WAF, AWS Shield Advanced, NAT Gateways, provisioned databases, provisioned DynamoDB capacity, cross-region replicas, AWS Backup plans, DynamoDB PITR, ALBs, RDS, OpenSearch, or any other paid/fixed-cost AWS service without first asking the user to confirm the service and estimated cost.
+- Cost is the highest-priority requirement for this low-priority application and outweighs uptime or availability. Minimize fixed and usage costs, and avoid observability unit-cost overhead unless confirmed.
+- Do not add CloudWatch alarms or detailed metrics, SNS, WAF, AWS Shield Advanced, NAT Gateways, provisioned databases, provisioned DynamoDB capacity, cross-region replicas, AWS Backup plans, DynamoDB PITR, ALBs, RDS, OpenSearch, or any other paid/fixed-cost AWS service without first asking the user to confirm the service and estimated cost.
 - Prefer serverless, usage-based services already in this repository: CloudFront, S3, API Gateway, Lambda, DynamoDB on-demand, and AWS-managed secrets/logging.
 - Do not re-enable CloudFront WAF or managed WAF rule groups.
 - DynamoDB PITR and AWS Backup are intentionally disabled. Do not enable either unless explicitly requested and approved.
