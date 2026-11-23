@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {orthogonalRoute,roundedRoute,occupyRoute,type Point} from '../ui/graph-routing';
-import {graphNode,nodePosition,nodePorts,transitionCurve} from '../ui/graph-model';
+import {orthogonalRoute,roundedRoute,occupyRoute,routeSegments,nearestRoutePosition,routePoint,type Point} from '../ui/graph-routing';
+import {graphNode,nodePosition,nodePorts,transitionCurve,GraphRoutes} from '../ui/graph-model';
 import {sampleRobot} from '../seasons/practice';
 import {ensureStates,addState} from '../contracts/states';
 import {parseDocument,syncSurfaceLinks} from '../contracts/model';
@@ -10,6 +10,33 @@ import {normalizeBinding,bindingLabel} from '../contracts/bindings';
 import {triggerActive} from '../contracts/triggers';
 
 const source={x:0,y:0,width:144,height:144},target={x:576,y:0,width:144,height:144},blocker={x:288,y:0,width:144,height:192};
+
+test('editing a route or label cannot rearrange other connections, including after reload',()=>{
+    const d=ensureStates(sampleRobot()),router=new GraphRoutes(),initial=router.layout(d),edge=d.edges.find(e=>e.id==='store')!;
+    edge.route=[[432,168],[432,336],[456,336],[456,168]];
+    const edited=router.layout(d);assert.notEqual(edited.get(edge.id)!.path,initial.get(edge.id)!.path);
+    const unchanged=(routes:ReturnType<GraphRoutes['layout']>)=>{for(const e of d.edges.filter(e=>e.id!==edge.id)){assert.deepEqual(routes.get(e.id)!.points,initial.get(e.id)!.points);assert.deepEqual(routes.get(e.id)!.center,initial.get(e.id)!.center);}};
+    unchanged(edited);unchanged(new GraphRoutes().layout(d));
+    const path=edited.get(edge.id)!.path;edge.labelPosition=.73;edge.key='gamepad:button:0';edge.duration=2;
+    const labeled=router.layout(d);unchanged(labeled);unchanged(new GraphRoutes().layout(d));assert.equal(labeled.get(edge.id)!.path,path);assert.deepEqual(labeled.get(edge.id)!.center,routePoint(labeled.get(edge.id)!.points,.73));
+});
+test('label projection slides through bends without changing route geometry',()=>{
+    const points:Point[]=[[0,0],[0,0],[120,0],[120,120],[0,120]],before=structuredClone(points);
+    assert.equal(nearestRoutePosition(points,[60,-50]),1/6);assert.equal(nearestRoutePosition(points,[180,60]),.5);assert.equal(nearestRoutePosition(points,[60,180]),5/6);
+    assert.deepEqual(routePoint(points,.5),[120,60]);assert.deepEqual(points,before);
+    assert.equal(nearestRoutePosition([[0,0],[0,0]],[4,4]),0);
+});
+test('segment arrows use actual segment midpoints and source-to-destination direction',()=>{
+    const segments=routeSegments([[0,0],[24,0],[120,0],[120,120],[120,120],[0,120],[0,0]]);
+    assert.deepEqual(segments.map(s=>s.center),[[60,0],[120,60],[60,120],[0,60]]);
+    assert.deepEqual(segments.map(s=>s.angle),[0,90,180,-90]);
+});
+test('travel and state label positions persist through import and automatic action link rebuilding',()=>{
+    const d=ensureStates(sampleRobot()),sub=d.subsystems[0],state=addState(d,sub,sub.states![0]);
+    d.edges[0].labelPosition=0;sub.stateTransitions!.push({id:'raise',source:sub.states![0].id,target:state.id,duration:0,key:'u',trigger:'press',labelPosition:1});
+    const saved=parseDocument(JSON.parse(JSON.stringify(d)));assert.equal(saved.edges[0].labelPosition,0);assert.equal(saved.subsystems[0].stateTransitions![0].labelPosition,1);
+    for(const value of [-.1,1.1,NaN]){const bad=structuredClone(d);bad.edges[0].labelPosition=value;assert.throws(()=>parseDocument(bad),/Malformed graph label position/);}
+});
 function check(points:Point[]){for(const p of points)assert.ok(p.every(n=>n%24===0));for(let i=1;i<points.length;i++)assert.ok(points[i][0]===points[i-1][0]||points[i][1]===points[i-1][1]);}
 test('orthogonal routes stay on the grid and avoid intermediate cards',()=>{
     const route=orthogonalRoute([144,72],[576,72],[source,target,blocker]);assert.equal(route.blocked,false);check(route.points);

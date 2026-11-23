@@ -27,6 +27,7 @@ import { keyboardDrive, gamepadControls, gamepadHeldBindings, driveBindings } fr
 if (cloudEnabled()) for (const [id, revision] of Object.entries(readCloudRevisions())) trackRevision(id, revision);
 let saving = false;
 let doc = snapDocumentInches(ensureStates(readDraft() ?? createSeasonRobot('reefscape-2025'))), selected = doc.id, selectedFace: Face = '+X';
+for(const action of doc.surfaces)if(!doc.layout[action.id])doc.layout[action.id]=nextNodePosition(doc);
 let mode: 'edit' | 'running' | 'paused' = 'edit', snapshot: Snapshot | undefined, workerReady = false, pendingPlay = false, isReplay = false;
 let robotEditable=!cloudEnabled() || !sharedRevision(doc.id);
 let librarySeason=doc.seasonId;
@@ -168,7 +169,7 @@ const graph = new GraphView($('#graph'), selectGraph, (which,p)=>commit(d=>{if(g
     const sub=doc.subsystems.find(s=>s.id===stateOwner);if(!sub||a===b||!sub.states!.some(s=>s.id===a)||!sub.states!.some(s=>s.id===b))return;
     if(sub.stateTransitions!.some(e=>e.source===a&&e.target===b)){toast('That state transition already exists.');return;}
     commit(d=>{const edge={id:id(),source:a,target:b,duration:.5,key:'u',trigger:'press' as const};d.subsystems.find(s=>s.id===stateOwner)!.stateTransitions!.push(edge);stateEdgeSelection=edge.id;selected=stateOwner;});
-}, which=>{selectGraph(which);setPropertiesVisible(true);},(which,route)=>commit(d=>{const edges=graphMode==='travel'?d.edges:d.subsystems.find(s=>s.id===stateOwner)!.stateTransitions!;const edge=edges.find(e=>e.id===which);if(edge){if(route)edge.route=route;else delete edge.route;if(graphMode==='travel')selected=which;else stateEdgeSelection=which;}}));
+}, which=>{selectGraph(which);setPropertiesVisible(true);},(which,route)=>commit(d=>{const edges=graphMode==='travel'?d.edges:d.subsystems.find(s=>s.id===stateOwner)!.stateTransitions!;const edge=edges.find(e=>e.id===which);if(edge){if(route)edge.route=route;else delete edge.route;if(graphMode==='travel')selected=which;else stateEdgeSelection=which;}}),(which,position)=>commit(d=>{const edge=(graphMode==='travel'?d.edges:d.subsystems.find(s=>s.id===stateOwner)!.stateTransitions!).find(e=>e.id===which);if(edge){edge.labelPosition=position;if(graphMode==='travel')selected=which;else stateEdgeSelection=which;}}));
 
 new ActionBeam(root,()=>mode==='edit'&&activeView==='edit',(x,y)=>viewport?.actionTarget(x,y,(owner,face)=>{
     if(inspectorScope==='field'){const goal=doc.field!.scoringElements.find(g=>g.id===owner);return !!goal&&!goal.surfaces.some(s=>s.faces.includes(face));}
@@ -235,6 +236,7 @@ function load(next: RobotDocument, editable = !cloudEnabled() || (!sharedRevisio
         send({ type: 'pause' });
     mode = 'edit';
     doc = syncSurfaceLinks(ensureStates(snapDocumentInches(ensureField(clone(next)))));librarySeason=doc.seasonId;
+    for(const action of doc.surfaces)if(!doc.layout[action.id])doc.layout[action.id]=nextNodePosition(doc);
     pendingPlay = false;
     stateEdgeSelection='';stateOwner='';
     simulationDirty = true;
@@ -556,7 +558,7 @@ function showResults() {
     $('[data-action="run-json"]').addEventListener('click', () => download('polysim-run.json', JSON.stringify(runs[Number($<HTMLSelectElement>('#compare-a').value)], null, 2)));
 }
 function exportCSV(run: SavedRun) { download('polysim-metrics.csv', metricsCSV(run), 'text/csv'); }
-function help() { modal(modalHead('HELP', 'PolySim') + `<div class="modal-body help-body"><div class="help-steps"><div><h3>Edit</h3><p>Select a box and drag its Move or Resize handles. The right inspector contains dimensions, capacity, faces and bindings. Hide expands the editor; Inspector restores the pane.</p></div><div><h3>Graph</h3><p>Nodes snap to the dot grid. Drag from an output port onto a destination. Select a connection and drag its highlighted segments to organize the route; Reset route restores automatic routing. Select any module or connection to edit it in the inspector.</p></div><div><h3>Drive</h3><p>Choose driver station 1, 2 or 3. The camera stays behind the station and smoothly tracks the robot. WASD moves; left/right arrows rotate. Opening Drive starts play automatically. Leaving Drive pauses play.</p></div></div><p>Click a key binding, then press a keyboard key, gamepad button, trigger, or stick direction. Gamepad labels use the standard controller layout. Yellow fills each box from the bottom according to owned inventory and capacity.</p><p>Save keeps robots in this browser. Export creates a JSON backup.</p><details class="event-details"><summary>Model limits</summary><p>Estimated practice fixture. No official FRC rules, drag, traction, tipping, articulated mechanisms or cloud sharing. Full assumptions appear in Results and the offline documentation.</p></details>${button('close', 'Close', 'primary')}</div>`); }
+function help() { modal(modalHead('HELP', 'PolySim') + `<div class="modal-body help-body"><div class="help-steps"><div><h3>Edit</h3><p>Select a box and drag its Move or Resize handles. The right inspector contains dimensions, capacity, faces and bindings. Hide expands the editor; Inspector restores the pane.</p></div><div><h3>Graph</h3><p>Nodes snap to the dot grid. Drag from an output port onto a destination. Select a connection and drag its highlighted segments to organize the route; Reset route restores automatic routing. Drag a key/time label to slide it along its own transition without moving the line. Select any module or connection to edit it in the inspector.</p></div><div><h3>Drive</h3><p>Choose driver station 1, 2 or 3. The camera stays behind the station and smoothly tracks the robot. WASD moves; left/right arrows rotate. Opening Drive starts play automatically. Leaving Drive pauses play.</p></div></div><p>Click a key binding, then press a keyboard key, gamepad button, trigger, or stick direction. Gamepad labels use the standard controller layout. Yellow fills each box from the bottom according to owned inventory and capacity.</p><p>Save keeps robots in this browser. Export creates a JSON backup.</p><details class="event-details"><summary>Model limits</summary><p>Estimated practice fixture. No official FRC rules, drag, traction, tipping, articulated mechanisms or cloud sharing. Full assumptions appear in Results and the offline documentation.</p></details>${button('close', 'Close', 'primary')}</div>`); }
 function removeSelected() {
     if(inspectorScope==='field'){$('#inspector').querySelector<HTMLButtonElement>('[data-action="field:delete"]')?.click();return;}
     const edge = doc.edges.find(e => e.id === selected);

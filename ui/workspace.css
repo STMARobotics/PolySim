@@ -380,3 +380,13 @@ dialog.library-dialog{width:1440px;max-width:94vw;height:88vh;max-height:94vh}
 .action-control{flex-shrink:0}
 .graph-edge .edge-label-leader{fill:none;stroke:#8ba9c9;stroke-width:1;stroke-dasharray:3 3;pointer-events:none}
 .graph-edge .route-handle{fill:#ffe044;stroke:#152b45;stroke-width:1;cursor:move;pointer-events:all}
+.graph-edge .edge-label{cursor:grab}
+.graph-edge .edge-label text{pointer-events:none}
+.graph-edge .segment-arrow{fill:#d2e3f4;stroke:#0b182a;stroke-width:1;pointer-events:none}
+.graph-edge.selected .segment-arrow{fill:#ffe044}
+.graph-edge .edge-label:focus-visible>rect{stroke:#ffe044;stroke-width:2}
+
+.graph-edge .route-grip{cursor:move}
+.graph-edge .route-grip rect{fill:#ffe044;stroke:#152b45;stroke-width:1}
+.graph-edge .route-grip path{stroke:#152b45;stroke-width:1;fill:none}
+.graph-edge .edge-label:active{cursor:grabbing}

@@ -19,7 +19,7 @@ export interface SubsystemState {
     capacity: number; ignoreCollision: boolean;
 }
 export type GraphRoute = [number,number][];
-export interface StateTransition {route?:GraphRoute;id: string; source: string; target: string; key: string; trigger: Trigger; duration: number}
+export interface StateTransition {labelPosition?:number;route?:GraphRoute;id: string; source: string; target: string; key: string; trigger: Trigger; duration: number}
 export interface Subsystem {
     id: string;
     name: string;
@@ -53,6 +53,7 @@ export interface Surface {
     unitsY?: number;
 }
 export interface Edge {
+    labelPosition?:number;
     route?:GraphRoute;
     pieceType?: string;
     id: string;
@@ -121,7 +122,7 @@ export function syncSurfaceLinks(d: RobotDocument): RobotDocument {
         if (!existing) { while (used.has(linkId)) linkId += ':'; }
         used.add(linkId);
         const legacy = s as Surface & {key?: string; trigger?: Trigger};
-        d.edges.push({...(existing?.route?{route:existing.route}:{}),id: linkId, source, target, pieceType,duration: existing?.duration ?? 0, key: existing?.key ?? legacy.key ?? (s.type === 'intake' ? 'i' : 'k'), trigger: existing?.trigger ?? legacy.trigger ?? 'hold', priority: existing?.priority ?? 0, concurrency: 100});
+        d.edges.push({...(existing?.route?{route:existing.route}:{}),...(existing?.labelPosition!==undefined?{labelPosition:existing.labelPosition}:{}),id: linkId, source, target, pieceType,duration: existing?.duration ?? 0, key: existing?.key ?? legacy.key ?? (s.type === 'intake' ? 'i' : 'k'), trigger: existing?.trigger ?? legacy.trigger ?? 'hold', priority: existing?.priority ?? 0, concurrency: 100});
       }
         delete (s as Surface & {key?:string}).key;
         delete (s as Surface & {trigger?:Trigger}).trigger;
@@ -277,6 +278,7 @@ export function parseDocument(raw: unknown): RobotDocument {
     for (const e of x.edges)
         if (!e || !['id', 'source', 'target', 'key', 'trigger'].every(k => typeof (e as any)[k] === 'string') || !['duration', 'priority', 'concurrency'].every(k => typeof (e as any)[k] === 'number'))
             throw Error('Malformed graph edge.');
+    for(const edge of [...x.edges,...x.subsystems.flatMap(s=>s.stateTransitions??[])])if(edge.labelPosition!==undefined&&(!Number.isFinite(edge.labelPosition)||edge.labelPosition<0||edge.labelPosition>1))throw Error('Malformed graph label position.');
     for(const edge of [...x.edges,...x.subsystems.flatMap(s=>s.stateTransitions??[])])if(edge.route!==undefined && (!Array.isArray(edge.route)||edge.route.length>64||edge.route.some(p=>!Array.isArray(p)||p.length!==2||!p.every(n=>Number.isFinite(n)&&Math.abs(n)<10000))))throw Error('Malformed graph route.');
     for (const p of Object.values(x.layout))
         if (!Array.isArray(p) || p.length !== 2 || !p.every(n => Number.isFinite(n) && Math.abs(n) < 10000))

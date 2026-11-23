@@ -67,3 +67,23 @@ export function routePoint(points:Point[],f:number):Point{
     for(let i=0;i<lengths.length;i++){if(distance<=lengths[i]){const t=lengths[i]?distance/lengths[i]:0;return [points[i][0]+(points[i+1][0]-points[i][0])*t,points[i][1]+(points[i+1][1]-points[i][1])*t];}distance-=lengths[i];}return points.at(-1)!;
 }
 export function occupyRoute(points:Point[],occupied:Map<string,number>){for(let i=1;i<points.length;i++){const a=points[i-1],b=points[i],steps=Math.max(Math.abs(b[0]-a[0]),Math.abs(b[1]-a[1]))/24;for(let t=0;t<=steps;t++){const k=key([a[0]+Math.sign(b[0]-a[0])*24*t,a[1]+Math.sign(b[1]-a[1])*24*t]);occupied.set(k,(occupied.get(k)??0)+1);}}}
+
+export function routeSegments(points:Point[]){
+    const corners=simplify(points);
+    return corners.slice(1).map((to,i)=>{const from=corners[i];return {from,to,center:[(from[0]+to[0])/2,(from[1]+to[1])/2] as Point,angle:Math.atan2(to[1]-from[1],to[0]-from[0])*180/Math.PI};});
+}
+
+/** Project a dragged label onto its connection without changing the connection. */
+export function nearestRoutePosition(points:Point[],point:Point,previous=.5){
+    const lengths=points.slice(1).map((p,i)=>Math.hypot(p[0]-points[i][0],p[1]-points[i][1])),total=lengths.reduce((a,b)=>a+b,0);
+    if(!total)return 0;
+    let walked=0,best=Infinity,position=0;
+    for(let i=0;i<lengths.length;i++){
+        const a=points[i],b=points[i+1],length=lengths[i];if(!length)continue;
+        const t=Math.max(0,Math.min(1,((point[0]-a[0])*(b[0]-a[0])+(point[1]-a[1])*(b[1]-a[1]))/(length*length)));
+        const distance=(point[0]-a[0]-(b[0]-a[0])*t)**2+(point[1]-a[1]-(b[1]-a[1])*t)**2,fraction=(walked+length*t)/total;
+        if(distance<best-1e-8||(Math.abs(distance-best)<1e-8&&Math.abs(fraction-previous)<Math.abs(position-previous))){best=distance;position=fraction;}
+        walked+=length;
+    }
+    return position;
+}

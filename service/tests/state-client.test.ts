@@ -6,6 +6,13 @@ import {addState} from '../../contracts/states';
 import {sampleRobot} from '../../seasons/practice';
 import {TARGETING_MODES} from '../../contracts/targeting';
 
+test('label position saves refuse servers that would silently strip the position',async context=>{
+    configureCloud({user:{sub:'test',email:'test@stmarobotics.org',name:'Test',role:'member'},csrfToken:'test',expiresAt:'2099-01-01'});
+    const doc=ensureStates(sampleRobot());doc.edges[0].labelPosition=0;let writes=0;
+    context.mock.method(globalThis,'fetch',async(path:string)=>{if(!path.includes('/seasons/'))writes++;return new Response(JSON.stringify({capabilities:['graph-routes','subsystem-states']}),{status:200});});
+    await assert.rejects(()=>saveShared(doc),/graph label update/);assert.equal(writes,0);
+});
+
 test('custom routes and gamepad bindings refuse older servers before any write',async context=>{
     const session={user:{sub:'test',email:'test@stmarobotics.org',name:'Test',role:'member' as const},csrfToken:'test',expiresAt:'2099-01-01'},doc=ensureStates(sampleRobot());let writes=0;
     context.mock.method(globalThis,'fetch',async(path:string)=>{if(!path.includes('/seasons/'))writes++;return new Response(JSON.stringify({capabilities:['subsystem-states']}),{status:200});});
