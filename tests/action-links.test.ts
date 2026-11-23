@@ -93,10 +93,10 @@ test('action transition time accepts instant or delayed values and rejects negat
     for(const time of [-1,NaN,61]) {const d=sampleRobot();d.edges[0].duration=time;assert.ok(validate(d).some(i=>i.level==='error'&&i.object==='capture'));}
 });
 
-test('transition labels are centered on the curve, with short routes lifted clear of modules', () => {
-    const short=transitionCurve([40,80],[240,80],{width:174,portY:48},{portY:72},76);
-    assert.deepEqual(short.center,short.point(.5));assert.equal(short.center[0],227);
-    assert.ok(short.center[1]+22<80);
-    const long=transitionCurve([40,80],[500,140],{width:144,portY:72},{portY:48},76);
-    assert.deepEqual(long.center,[342,170]);
+test('transition labels sit on grid routes above tightly spaced cards', () => {
+    const route=transitionCurve([48,96],[288,96],{width:192,portY:48},{portY:72},96);
+    assert.ok(route.center.every(n=>n%24===0));
+    assert.ok(route.center[1]+24<96);
+    assert.ok(!route.path.includes(' C '));
+    assert.deepEqual(route.point(0),[240,144]);assert.deepEqual(route.point(1),[288,168]);
 });

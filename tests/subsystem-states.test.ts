@@ -17,6 +17,11 @@ function robot() {
     return {d,sub,from,to};
 }
 const input=(held:string[]=[])=>({x:0,y:0,turn:0,held});
+
+test('gamepad transition presses change runtime state and releases preserve it',()=>{
+    const {d,sub,to}=robot();sub.stateTransitions![0].key='gamepad:button:0';sub.stateTransitions![0].duration=0;
+    const sim=new Simulation(d);try{sim.step(input(['gamepad:button:0']));assert.equal(sim.snapshot().subsystems![2].stateId,to.id);sim.step(input());assert.equal(sim.snapshot().subsystems![2].stateId,to.id);}finally{sim.free();}
+});
 test('legacy robots migrate without changing geometry, action settings or historical collision flags',()=>{
     const old=sampleRobot();old.subsystems[0].solid=false;
     const geometry=structuredClone(old.subsystems),loaded=parseDocument(old);

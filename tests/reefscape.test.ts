@@ -29,7 +29,7 @@ test('REEFSCAPE has a fixed blocky field, two physical piece types, and default 
 test('travel graph provides separate Coral/Algae entry and exit ports while state ports stay generic',()=>{
  const d=createSeasonRobot('reefscape-2025'),ports=nodePorts(d,'hopper'),actions=nodePorts(d,'intake');
  assert.deepEqual(ports.inputs.map(p=>p.type),['coral','algae']);assert.deepEqual(ports.outputs.map(p=>p.type),['coral','algae']);assert.notEqual(ports.inputs[0].y,ports.inputs[1].y);
- const lanes=[0,1].map(lane=>transitionCurve([0,80],[240,80],{width:144,portY:ports.outputs[lane].y},{portY:ports.inputs[lane].y},76,lane));assert.ok(Math.abs(lanes[0].center[1]-lanes[1].center[1])>=50);
+ const lanes=[0,1].map(lane=>transitionCurve([0,96],[288,96],{width:144,portY:ports.outputs[lane].y},{portY:ports.inputs[lane].y},76,lane));assert.notEqual(lanes[0].path,lanes[1].path);for(const lane of lanes)assert.ok(lane.center.every(n=>n%24===0));
  assert.deepEqual(actions.outputs.map(p=>p.type),['coral','algae']);assert.equal(nodePorts(d,'hopper',true).inputs.length,1);
  d.surfaces[0].accepts=['coral'];syncSurfaceLinks(d);assert.deepEqual(nodePorts(d,'intake').outputs.map(p=>p.type),['coral']);
  d.surfaces[0].accepts=['algae'];assert.equal(nodePorts(d,'intake').outputs[0].color,ports.outputs[1].color);

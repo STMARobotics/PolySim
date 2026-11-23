@@ -12,21 +12,24 @@ import './workspace.css';
 import { clone, createAction, DT, ENGINE_VERSION, syncSurfaceLinks, surfaceForEdge, FACES, freeSpeed, id, nodeName, parseDocument, ticksFor, validConnection, validate, type Face, type RobotDocument, type Surface, type Vec3 } from '../contracts/model';
 import { practice, sampleRobot } from '../seasons/practice';
 import type { Controls, FromWorker, Snapshot, ToWorker, InputFrame } from '../simulation/protocol';
+import {robotPreview} from './robot-preview';
 import { Viewport } from './viewport';
 import { esc, GraphView } from './graph-view';
 import { download, readDraft, readRobots, readRuns, saveDraft, saveRobot, saveRun, type SavedRun, readCloudRevisions, writeCloudRevision } from './storage';
-import { cloudEnabled, cloudLibrary, cloudRobot, saveShared, sharedRevision, signedInUser, trackRevision, signOut, ApiError, type RobotSummary } from './cloud';
+import { cloudEnabled, cloudLibrary, cloudRobot, saveShared, sharedRevision, signedInUser, trackRevision, signOut, ApiError, robotMetadata, type RobotSummary } from './cloud';
 import { metricsCSV } from './report';
 import { normalizeBinding, bindingLabel } from '../contracts/bindings';
 import { nextNodePosition } from './editor-model';
 import type { DriverStation } from './camera-model';
 import { SimulationClient } from '../simulation/client';
 import { displayValue, storedValue, displayIssue, propertyStep, inchProperty, inchInputLimits } from './units';
-import { keyboardDrive } from './drive-controls';
+import { keyboardDrive, gamepadControls, gamepadHeldBindings, driveBindings } from './drive-controls';
 if (cloudEnabled()) for (const [id, revision] of Object.entries(readCloudRevisions())) trackRevision(id, revision);
 let saving = false;
 let doc = snapDocumentInches(ensureStates(readDraft() ?? createSeasonRobot('reefscape-2025'))), selected = doc.id, selectedFace: Face = '+X';
+for(const action of doc.surfaces)if(!doc.layout[action.id])doc.layout[action.id]=nextNodePosition(doc);
 let mode: 'edit' | 'running' | 'paused' = 'edit', snapshot: Snapshot | undefined, workerReady = false, pendingPlay = false, isReplay = false;
+let robotEditable=!cloudEnabled() || !sharedRevision(doc.id);
 let librarySeason=doc.seasonId;
 let inspectorScope:'robot'|'field'='robot';
 let graphMode: 'travel'|'states'='travel', stateOwner='', stateEdgeSelection='';
@@ -48,7 +51,7 @@ root.innerHTML = `
     <span id="save-status" class="save-status"></span>
     <div class="project-actions">${button('undo', '↶', 'icon-button', 'Undo (Ctrl+Z)')}${button('redo', '↷', 'icon-button', 'Redo (Ctrl+Shift+Z)')}${button('save', 'Save', 'secondary')}${cloudEnabled() ? button('signout', 'Sign out', 'text-button account-signout', signedInUser()!.email) : ''}</div>
   </header>
-  <nav class="workspace-nav" aria-label="Workspace views" role="tablist"><h1 id="robot-title"></h1>${([['edit', 'Edit'], ['graph', 'Graph'], ['drive', 'Drive']] as const).map(([v, label]) => `<button role="tab" id="tab-${v}" aria-selected="${v === 'edit'}" aria-controls="workspace" data-action="workspace:${v}">${label}</button>`).join('')}</nav>
+  <nav class="workspace-nav" aria-label="Workspace views" role="tablist"><h1 id="robot-title"></h1>${([['edit', 'Edit'], ['graph', 'Graph'], ['drive', 'Drive']] as const).map(([v, label]) => `<button role="tab" id="tab-${v}" aria-selected="${v === 'edit'}" aria-controls="workspace" data-action="workspace:${v}">${label}</button>`).join('')}<button role="tab" id="tab-library" aria-selected="false" aria-controls="modal" data-action="library">Library</button></nav>
   <main class="workspace" id="workspace" data-view="edit" data-properties="visible">
     <section class="stage" aria-label="3D editor"><div class="viewport-toolbar"><div class="edit-tools">${button('transform:translate', 'Move', 'text-button active', 'Drag the X, Y or Z handles')}${button('transform:scale', 'Resize', 'text-button', 'Drag the X, Y or Z handles')}</div><div class="station-tools" role="group" aria-label="Driver station"><span>Station</span>${([1, 2, 3] as const).map(n => `<button data-action="station:${n}" aria-label="Driver station ${n}" aria-pressed="${n === 2}">${n}</button>`).join('')}</div>${button('restart-drive','Restart','text-button restart-drive')}<span id="field-selection" class="selection-name"></span><button id="properties-show" class="secondary hidden" data-action="properties:show" aria-controls="properties-pane" aria-expanded="true">Inspector</button></div><div id="viewport"><div class="viewport-caption"><span class="view-tag" id="mode-tag">Edit</span></div><div class="runtime-hud" id="runtime-hud"><div><small>Pickups</small><strong id="hud-pickups">0</strong></div><div><small>Score</small><strong id="hud-score">0</strong></div></div><div class="viewport-hint" id="viewport-hint"></div></div><div class="drivebar"><div class="drive-keys" title="WASD: translate. Left/right arrows: rotate."><kbd>WASD</kbd><kbd>←/→</kbd></div><div id="action-controls"></div><span class="drive-note" id="drive-note"></span></div></section>
     <aside class="inspector" id="properties-pane" aria-label="Robot inspector"><section class="robot-section"><div class="panel-title"><div class="inspector-scopes">${button('scope:robot','Robot','scope-tab active')}${button('scope:field','Field','scope-tab')}<span id="sub-count" class="count"></span></div><button class="text-button" data-action="properties:hide" aria-controls="properties-pane" aria-expanded="true">Hide</button></div><div class="robot-structure"><button class="robot-row" data-select="robot"><span class="robot-icon">▧</span><strong>Robot basics</strong></button><div id="tree"></div></div><div class="robot-tools">${button('add', '＋ Subsystem', 'secondary')}${button('export', 'Export', 'text-button', 'Export robot JSON')}${button('import', 'Import', 'text-button', 'Import robot JSON')}</div></section><div class="panel-title properties-heading"><span>Robot</span></div><div id="inspector"></div></aside>
@@ -64,6 +67,10 @@ const modal = (content: string) => {
         mode = 'paused';
         renderShell();
     }
+    const isLibrary=content.includes('library-header');
+    $('#modal').classList.toggle('library-dialog',isLibrary);
+    $('#tab-library').setAttribute('aria-selected',String(isLibrary));
+    document.querySelectorAll<HTMLElement>('[data-action^="workspace:"]').forEach(tab=>tab.setAttribute('aria-selected',String(!isLibrary && tab.dataset.action==='workspace:'+activeView)));
     $('#modal-content').innerHTML = content;
     const d = $<HTMLDialogElement>('#modal');
     if (!d.open)
@@ -72,6 +79,7 @@ const modal = (content: string) => {
 const close = () => $('#modal').hasAttribute('open') && $<HTMLDialogElement>('#modal').close();
 const modalHead = (eyebrow: string, title: string) => `<div class="modal-header"><div><div class="eyebrow">${eyebrow}</div><h2>${title}</h2></div>${button('close', '×', 'close-button', 'Close dialog')}</div>`;
 const safeSaveDraft = () => {
+    if(!robotEditable)return;
     try {
         saveDraft(doc);
     }
@@ -80,8 +88,8 @@ const safeSaveDraft = () => {
     }
 };
 const commit = (change: (d: RobotDocument) => void) => {
-    if (mode !== 'edit') {
-        toast('Return to Edit to change the robot.');
+    if (!robotEditable || mode !== 'edit') {
+        toast('Duplicate this robot to make changes, or return to Edit.');
         return;
     }
     undo.push(clone(doc));
@@ -161,7 +169,7 @@ const graph = new GraphView($('#graph'), selectGraph, (which,p)=>commit(d=>{if(g
     const sub=doc.subsystems.find(s=>s.id===stateOwner);if(!sub||a===b||!sub.states!.some(s=>s.id===a)||!sub.states!.some(s=>s.id===b))return;
     if(sub.stateTransitions!.some(e=>e.source===a&&e.target===b)){toast('That state transition already exists.');return;}
     commit(d=>{const edge={id:id(),source:a,target:b,duration:.5,key:'u',trigger:'press' as const};d.subsystems.find(s=>s.id===stateOwner)!.stateTransitions!.push(edge);stateEdgeSelection=edge.id;selected=stateOwner;});
-}, which=>{selectGraph(which);setPropertiesVisible(true);});
+}, which=>{selectGraph(which);setPropertiesVisible(true);},(which,route)=>commit(d=>{const edges=graphMode==='travel'?d.edges:d.subsystems.find(s=>s.id===stateOwner)!.stateTransitions!;const edge=edges.find(e=>e.id===which);if(edge){if(route)edge.route=route;else delete edge.route;if(graphMode==='travel')selected=which;else stateEdgeSelection=which;}}),(which,position)=>commit(d=>{const edge=(graphMode==='travel'?d.edges:d.subsystems.find(s=>s.id===stateOwner)!.stateTransitions!).find(e=>e.id===which);if(edge){edge.labelPosition=position;if(graphMode==='travel')selected=which;else stateEdgeSelection=which;}}));
 
 new ActionBeam(root,()=>mode==='edit'&&activeView==='edit',(x,y)=>viewport?.actionTarget(x,y,(owner,face)=>{
     if(inspectorScope==='field'){const goal=doc.field!.scoringElements.find(g=>g.id===owner);return !!goal&&!goal.surfaces.some(s=>s.faces.includes(face));}
@@ -222,11 +230,14 @@ function simulationFailed(message: string) {
     render();
     toast(`Simulation unavailable: ${message || 'Unable to initialize physics.'}`);
 }
-function load(next: RobotDocument) {
+function load(next: RobotDocument, editable = !cloudEnabled() || (!sharedRevision(next.id) && !robotMetadata.has(next.id)) || robotMetadata.get(next.id)?.createdBy===signedInUser()?.sub, view: WorkspaceView = editable ? 'edit' : 'drive') {
+    robotEditable=editable;
     if (mode !== 'edit')
         send({ type: 'pause' });
     mode = 'edit';
     doc = syncSurfaceLinks(ensureStates(snapDocumentInches(ensureField(clone(next)))));librarySeason=doc.seasonId;
+    for(const action of doc.surfaces)if(!doc.layout[action.id])doc.layout[action.id]=nextNodePosition(doc);
+    pendingPlay = false;
     stateEdgeSelection='';stateOwner='';
     simulationDirty = true;
     selected = doc.id;
@@ -239,7 +250,8 @@ function load(next: RobotDocument) {
     close();
     render();
     setPropertiesVisible(true);
-    setWorkspaceView('edit');
+    setWorkspaceView(view);
+    if(view==='drive')resumeDrive();
     graph.fit();
 }
 function start(replay?: InputFrame[], endTick = Number.MAX_SAFE_INTEGER) {
@@ -275,7 +287,7 @@ function render() {
     if (mode !== 'edit' && snapshot)
         viewport?.update(snapshot);
     if (viewport)
-        viewport.setEditing(mode === 'edit' && activeView === 'edit');
+        viewport.setEditing(robotEditable && mode === 'edit' && activeView === 'edit');
     $('.graph-panel').setAttribute('aria-label',graphMode==='states'?'Subsystem states view':'Travel Path view');
     graph.nodeTypeLabel=graphMode==='states'?'State':'Subsystem';
     graph.defaultStateId=graphMode==='states'?(doc.subsystems.find(s=>s.id===stateOwner)?.states?.find(t=>t.isDefault)?.id ?? ''):'';
@@ -286,10 +298,13 @@ function render() {
     updateRuntime();
 }
 function renderShell() {
+    $('#tab-edit').classList.toggle('hidden',!robotEditable);
+    $('#tab-graph').classList.toggle('hidden',!robotEditable);
+    $('.project-actions').querySelectorAll<HTMLElement>('[data-action=save],[data-action=undo],[data-action=redo]').forEach(b=>b.classList.toggle('hidden',!robotEditable));
     const sourceSelected=inspectorScope==='field'&&doc.field!.sources.some(s=>s.id===selected);if(sourceSelected&&transformMode==='scale'){transformMode='translate';viewport?.setTransformMode('translate');}
     $('#robot-title').textContent = doc.name;
-    $('#save-status').textContent = saving ? 'Saving…' : dirty ? (cloudEnabled() ? 'Unsynced' : 'Draft') : cloudEnabled() ? (sharedRevision(doc.id) ? `Shared · rev ${sharedRevision(doc.id)}` : 'Local draft') : 'Saved';
-    $<HTMLButtonElement>('[data-action="save"]').disabled = mode !== 'edit' || saving;
+    $('#save-status').textContent = saving ? 'Saving…' : dirty ? (cloudEnabled() ? 'Unsynced' : 'Draft') : cloudEnabled() ? (sharedRevision(doc.id) ? `Saved · rev ${sharedRevision(doc.id)}` : 'Local draft') : 'Saved';
+    $<HTMLButtonElement>('[data-action="save"]').disabled = !robotEditable || mode !== 'edit' || saving;
     $<HTMLButtonElement>('[data-action="undo"]').disabled = !undo.length || mode !== 'edit';
     $<HTMLButtonElement>('[data-action="redo"]').disabled = !redo.length || mode !== 'edit';
     for (const action of ['add', 'connect', 'add-graph', 'transform:translate', 'transform:scale'])
@@ -309,8 +324,8 @@ function renderShell() {
     $('#field-selection').textContent = activeView === 'drive' || nodeName(doc, selected) === 'Missing node' ? '' : nodeName(doc, selected);
     $('#graph-selection').textContent = [...doc.subsystems, ...doc.surfaces, ...doc.edges].some(n => n.id === selected) ? (doc.edges.some(e => e.id === selected) ? 'Connection' : nodeName(doc, selected)) : '';
     document.querySelectorAll<HTMLElement>('[data-action^="transform:"]').forEach(b => b.classList.toggle('active', b.dataset.action === 'transform:' + transformMode));
-    const actions = [...new Set([...doc.edges,...doc.subsystems.flatMap(s=>s.stateTransitions ?? [])].map(e => normalizeBinding(e.key)!))];
-    $('#action-controls').innerHTML = actions.map(k => `<button class="action-control" data-hold="${esc(k)}" ${mode === 'edit' || isReplay ? 'disabled' : ''}><kbd>${esc(bindingLabel(k))}</kbd>${esc((doc.edges.find(e=>normalizeBinding(e.key)===k) ? surfaceForEdge(doc,doc.edges.find(e=>normalizeBinding(e.key)===k)!)?.type ?? 'Transfer' : 'State'))}</button>`).join('');
+    const actions = driveBindings(doc);
+    $('#action-controls').innerHTML = actions.map(({key,label}) => `<button class="action-control" data-hold="${esc(key)}" ${mode === 'edit' || isReplay ? 'disabled' : ''}><kbd>${esc(bindingLabel(key))}</kbd>${esc(label)}</button>`).join('');
     $('#action-controls').querySelectorAll<HTMLButtonElement>('[data-hold]').forEach(b => {
         b.addEventListener('pointerdown', e => { virtual.add(b.dataset.hold!); b.setPointerCapture(e.pointerId); b.classList.add('held'); sendControls(); });
         const release = () => { virtual.delete(b.dataset.hold!); b.classList.remove('held'); sendControls(); };
@@ -330,7 +345,7 @@ function renderTree() {
     $('[data-select="robot"]').classList.toggle('selected', selected === doc.id);
     $('#tree').innerHTML = subsystemTree(doc).map(({subsystem:sub,states})=>`<div class="tree-group"><button class="tree-row ${selected===sub.id?'selected':''}" data-select="${esc(sub.id)}"><span class="cube-icon">◇</span><span>${esc(sub.name)}</span><small>${sub.capacity}</small></button>${states.map(({state,actions})=>`<div class="tree-state-group"><button class="tree-state ${selected===sub.id&&openStates[sub.id]===state.id?'selected':''}" data-select="${esc(state.id)}" aria-label="${esc(sub.name+' / '+state.name)}"><span class="state-marker">${state.isDefault?'●':'◇'}</span><span>${esc(state.name)}</span></button>${actions.map(action=>`<button class="tree-surface tree-action ${selected===action.id?'selected':''}" data-select="${esc(action.id)}" aria-label="${esc(sub.name+' / '+state.name+' / '+action.name)}"><i class="swatch ${action.type}"></i><span>${esc(action.name)}</span></button>`).join('')}</div>`).join('')}</div>`).join('');
 }
-const bindingField = (path: string, value: string) => `<label class="field"><span>Key</span><button type="button" aria-label="Key binding ${esc(bindingLabel(value))}" title="Click, then press a key" class="binding-capture ${capturingBinding?.id === selected && capturingBinding.path === path ? 'recording' : ''}" data-bind="${path}" ${mode !== 'edit' ? 'disabled' : ''}>${capturingBinding?.id === selected && capturingBinding.path === path ? 'Press a key…' : esc(bindingLabel(value))}</button></label>`;
+const bindingField = (path: string, value: string) => `<label class="field"><span>Key</span><button type="button" aria-label="Key binding ${esc(bindingLabel(value))}" title="Click, then press a keyboard key or gamepad control" class="binding-capture ${capturingBinding?.id === selected && capturingBinding.path === path ? 'recording' : ''}" data-bind="${path}" ${mode !== 'edit' ? 'disabled' : ''}>${capturingBinding?.id === selected && capturingBinding.path === path ? 'Press a key or gamepad control…' : esc(bindingLabel(value))}</button></label>`;
 const field = (label: string, key: string, value: string | number, type = 'number', step = '0.01', help = '') => `<label class="field"><span>${label}</span><input data-field="${key}" type="${type}" value="${esc(typeof value === 'number' ? displayValue(key, value) : value)}" step="${propertyStep(key,step)}" ${key==='sub.targetingFreedom'?'min="0" max="360"':inchProperty(key)?inchInputLimits(key):''} ${mode !== 'edit' ? 'disabled' : ''} />${help ? `<small>${help}</small>` : ''}</label>`;
 const dropdown = (label: string, key: string, value: string, options: [
     string,
@@ -476,17 +491,40 @@ function updateRuntime() {
     $('#runtime-status').classList.toggle('warning-text', !!s?.blocked.length || !!s?.slow);
 }
 function showValidation() { const issues = validate(doc); modal(modalHead('Design check', 'Validation & model scope') + `<div class="modal-body"><div class="notice">Fix errors before driving. Model notes describe the limits of this offline prototype.</div><div class="issue-list">${issues.map(i => `<button class="issue ${i.level}" data-issue="${esc(i.object)}"><span>${i.level === 'error' ? '⚠' : 'ⓘ'}</span><div><strong>${i.level === 'error' ? 'Fix required' : 'Model note'}</strong><p>${esc(displayIssue(i.message))}</p></div></button>`).join('')}</div></div>`); }
-function showLocalLibrary() { const robots=readRobots().filter(r=>r.document.seasonId===librarySeason); modal(modalHead('Local workspace', 'Your robot library') + `<div class="modal-body"><div class="library-toolbar"><label class="field"><span>Season</span><select id="new-season" aria-label="Season">${seasons.map(s=>`<option value="${s.id}" ${s.id===librarySeason?'selected':''}>${esc(s.title)}</option>`).join('')}</select></label>${button('new', '＋ New robot', 'primary')}</div><p class="help-text">Saved in this browser on this local address. Offline mode does not use Google sign-in or a shared team library.</p><div class="library-grid"><button class="robot-card sample-card" data-action="sample"><span class="card-overline">Guided sample</span><span class="card-robot">▧</span><h3>${librarySeason==='reefscape-2025'?'REEFSCAPE prototype':'Atlas prototype'}</h3><p>Collector, hopper, launcher.<br>A complete pipeline to explore.</p><span class="card-footer">Open a fresh sample</span></button>${robots.map(r => `<article class="robot-card"><span class="card-overline">Local robot · rev ${r.document.revision}</span><span class="card-robot">▧</span><h3>${esc(r.document.name)}</h3><p>${r.document.subsystems.length} subsystems · ${r.document.edges.length} connections<br>${esc(new Date(r.updated).toLocaleString())}</p><div class="card-footer">${button('open:' + r.document.id, 'Open', 'secondary')}${button('copy:' + r.document.id, 'Duplicate', 'text-button')}</div></article>`).join('')}</div></div>`); }
-let cloudRows: RobotSummary[] = [], libraryCursor: string|undefined;
+const libraryHeader=()=>`<div class="modal-header library-header"><h2>Robot library</h2><div class="library-header-actions">${button('new','＋ New robot','primary')}${button('close','×','close-button','Close library')}</div></div>`;
+const libraryToolbar=()=>`<div class="library-toolbar"><label class="field"><span>Season</span><select id="new-season" aria-label="Season">${seasons.map(s=>`<option value="${s.id}" ${s.id===librarySeason?'selected':''}>${esc(s.title)}</option>`).join('')}</select></label></div>`;
+const updatedLabel=(date:string)=>esc(new Date(date).toLocaleDateString(undefined,{year:'numeric',month:'short',day:'numeric'}));
+function libraryCard(r:{id:string;name:string;updated:string},creator:string,editable:boolean,preview:string) {
+    return `<article class="robot-card"><div class="card-preview" data-preview="${esc(r.id)}">${preview}</div><h3>${esc(r.name)}</h3><p class="card-creator">By ${esc(creator)}</p><p class="card-updated">Updated ${updatedLabel(r.updated)}</p><div class="card-footer">${editable?button('edit:'+r.id,'Edit','secondary'):''}${button('open:'+r.id,'Drive','primary')}${button('copy:'+r.id,'Duplicate','text-button')}</div></article>`;
+}
+function showLocalLibrary() {
+    const robots=readRobots().filter(r=>r.document.seasonId===librarySeason);
+    modal(libraryHeader()+`<div class="modal-body">${libraryToolbar()}<div class="library-grid">${robots.map(r=>libraryCard({id:r.document.id,name:r.document.name,updated:r.updated},'You',true,robotPreview(r.document))).join('')}</div>${!robots.length?'<p class="library-empty">Create your first robot to get started.</p>':''}</div>`);
+}
+let cloudRows: RobotSummary[] = [], libraryCursor: string|undefined, libraryRequest=0;
+$<HTMLDialogElement>('#modal').addEventListener('close',()=>{libraryRequest++;$('#tab-library').setAttribute('aria-selected','false');document.querySelectorAll<HTMLElement>('[data-action^="workspace:"]').forEach(tab=>tab.setAttribute('aria-selected',String(tab.dataset.action==='workspace:'+activeView)));});
+const previewCache=new Map<string,{revision:number;svg:string}>();
 async function showLibrary(more = false) {
+    const request=++libraryRequest;
     if (!cloudEnabled()) { showLocalLibrary(); return; }
-    modal(modalHead('Team workspace', 'Robot library') + '<div class="modal-body">Loading…</div>');
+    modal(libraryHeader() + '<div class="modal-body">Loading…</div>');
     try {
         const page = await cloudLibrary(more ? libraryCursor : undefined,librarySeason);
+        if(request!==libraryRequest)return;
         cloudRows = more ? [...cloudRows, ...page.items] : page.items;
         libraryCursor = page.cursor;
-        modal(modalHead('Team workspace', 'Robot library') + `<div class="modal-body"><div class="library-toolbar"><label class="field"><span>Season</span><select id="new-season">${seasons.map(s=>`<option value="${s.id}" ${s.id===librarySeason?'selected':''}>${esc(s.title)}</option>`).join('')}</select></label>${button('new', '＋ New robot', 'primary')}${button('sample', 'Guided sample', 'secondary')}</div><div class="library-grid">${cloudRows.map(r => `<article class="robot-card"><span class="card-overline">Shared · rev ${r.revision}</span><h3>${esc(r.name)}</h3><p>${r.subsystems} subsystems · ${r.connections} connections<br>${esc(new Date(r.updated).toLocaleString())}</p><div class="card-footer">${button('open:' + r.id, 'Open', 'secondary')}${button('copy:' + r.id, 'Duplicate', 'text-button')}</div></article>`).join('')}</div>${libraryCursor ? button('library-more', 'Load more', 'secondary') : ''}${!cloudRows.length ? '<p>No shared robots yet. Create a robot and save it.</p>' : ''}</div>`);
-    } catch (e) {modal(modalHead('Team workspace', 'Robot library') + `<div class="modal-body"><p>${esc(e instanceof Error ? e.message : 'Unable to load robots.')}</p>${button('library', 'Retry', 'secondary')}</div>`);}
+        cloudRows.forEach(r=>robotMetadata.set(r.id,r));
+        modal(libraryHeader() + `<div class="modal-body">${libraryToolbar()}<div class="library-grid">${cloudRows.map(r => libraryCard(r,r.creatorName || (r.createdBy===signedInUser()?.sub?signedInUser()!.name:'Unknown creator'),r.createdBy===signedInUser()?.sub,previewCache.get(r.id)?.revision===r.revision?previewCache.get(r.id)!.svg:'<span>Loading preview…</span>')).join('')}</div>${libraryCursor ? button('library-more', 'Load more', 'secondary') : ''}${!cloudRows.length ? '<p class="library-empty">Create your first robot to get started.</p>' : ''}</div>`);
+        await Promise.allSettled(cloudRows.map(async r=>{
+            if(previewCache.get(r.id)?.revision===r.revision)return;
+            let svg:string;
+            try{const robot=await cloudRobot(r.id);svg=robotPreview(robot);previewCache.set(r.id,{revision:robot.revision,svg});}
+            catch{svg='<span>Preview unavailable</span>';}
+            if(request!==libraryRequest)return;
+            const target=Array.from(document.querySelectorAll<HTMLElement>('[data-preview]')).find(el=>el.dataset.preview===r.id);
+            if(target)target.innerHTML=svg;
+        }));
+    } catch (e) {if(request===libraryRequest)modal(libraryHeader() + `<div class="modal-body"><p>${esc(e instanceof Error ? e.message : 'Unable to load robots.')}</p>${button('library', 'Retry', 'secondary')}</div>`);}
 }
 function rememberRevision(document: RobotDocument) {
     trackRevision(document.id, document.revision);
@@ -520,7 +558,7 @@ function showResults() {
     $('[data-action="run-json"]').addEventListener('click', () => download('polysim-run.json', JSON.stringify(runs[Number($<HTMLSelectElement>('#compare-a').value)], null, 2)));
 }
 function exportCSV(run: SavedRun) { download('polysim-metrics.csv', metricsCSV(run), 'text/csv'); }
-function help() { modal(modalHead('HELP', 'PolySim') + `<div class="modal-body help-body"><div class="help-steps"><div><h3>Edit</h3><p>Select a box and drag its Move or Resize handles. The right inspector contains dimensions, capacity, faces and bindings. Hide expands the editor; Inspector restores the pane.</p></div><div><h3>Graph</h3><p>Drag from an output port onto a destination. Select any module or connection to edit it in the right inspector.</p></div><div><h3>Drive</h3><p>Choose driver station 1, 2 or 3. The camera stays behind the station and smoothly tracks the robot. WASD moves; left/right arrows rotate. Opening Drive starts play automatically. Leaving Drive pauses play.</p></div></div><p>Click a key binding, then press the desired key. Space, Shift and Enter are supported. Yellow fills each box from the bottom according to owned inventory and capacity.</p><p>Save keeps robots in this browser. Export creates a JSON backup.</p><details class="event-details"><summary>Model limits</summary><p>Estimated practice fixture. No official FRC rules, drag, traction, tipping, articulated mechanisms or cloud sharing. Full assumptions appear in Results and the offline documentation.</p></details>${button('close', 'Close', 'primary')}</div>`); }
+function help() { modal(modalHead('HELP', 'PolySim') + `<div class="modal-body help-body"><div class="help-steps"><div><h3>Edit</h3><p>Select a box and drag its Move or Resize handles. The right inspector contains dimensions, capacity, faces and bindings. Hide expands the editor; Inspector restores the pane.</p></div><div><h3>Graph</h3><p>Nodes snap to the dot grid. Drag from an output port onto a destination. Select a connection and drag its highlighted segments to organize the route; Reset route restores automatic routing. Drag a key/time label to slide it along its own transition without moving the line. Select any module or connection to edit it in the inspector.</p></div><div><h3>Drive</h3><p>Choose driver station 1, 2 or 3. The camera stays behind the station and smoothly tracks the robot. WASD moves; left/right arrows rotate. Opening Drive starts play automatically. Leaving Drive pauses play.</p></div></div><p>Click a key binding, then press a keyboard key, gamepad button, trigger, or stick direction. Gamepad labels use the standard controller layout. Yellow fills each box from the bottom according to owned inventory and capacity.</p><p>Save keeps robots in this browser. Export creates a JSON backup.</p><details class="event-details"><summary>Model limits</summary><p>Estimated practice fixture. No official FRC rules, drag, traction, tipping, articulated mechanisms or cloud sharing. Full assumptions appear in Results and the offline documentation.</p></details>${button('close', 'Close', 'primary')}</div>`); }
 function removeSelected() {
     if(inspectorScope==='field'){$('#inspector').querySelector<HTMLButtonElement>('[data-action="field:delete"]')?.click();return;}
     const edge = doc.edges.find(e => e.id === selected);
@@ -539,16 +577,16 @@ function removeSelected() {
     });
     toast(`${sub ? 'Subsystem' : surface ? 'Surface' : 'Connection'} removed${affected ? ' with ' + affected + ' connected edges' : ''}. Undo restores the whole edit.`);
 }
-function sendControls(gamepad?: {
-    x: number;
-    y: number;
-    turn: number;
-    held: string[];
-}) {
+let padControls=gamepadControls();
+function captureKey(key:string){
+    const capture=capturingBinding;if(!capture)return;capturingBinding=undefined;
+    commit(d=>{const item=capture.path==='stateEdge.key'?d.subsystems.find(s=>s.id===capture.id)?.stateTransitions?.find(e=>e.id===stateEdgeSelection):d.edges.find(e=>e.id===capture.id);if(item)item.key=key;});
+}
+function sendControls() {
     if (mode === 'edit' || isReplay || !workerReady)
         return;
     const {x, y, turn} = keyboardDrive(keys);
-    const input: Controls = { x: gamepad?.x || x, y: gamepad?.y || y, turn: gamepad?.turn || turn, held: [...new Set([...keys, ...virtual, ...gamepad?.held ?? []])].filter(k => !!normalizeBinding(k)).sort() };
+    const input: Controls = { x: padControls.x || x, y: padControls.y || y, turn: padControls.turn || turn, held: [...new Set([...keys, ...virtual, ...gamepadHeldBindings(doc,padControls.held)])].filter(k => !!normalizeBinding(k)).sort() };
     send({ type: 'controls', controls: input });
 }
 document.addEventListener('click', async e => {
@@ -613,7 +651,7 @@ document.addEventListener('click', async e => {
         toast('Copy created. Save to add it to the shared library.'); return;
     }
     if (action === 'save') {
-        if (saving) return;
+        if (!robotEditable || saving) return;
         if (cloudEnabled()) {
             const captured = clone(doc); saving = true; renderShell();
             try {
@@ -636,7 +674,7 @@ document.addEventListener('click', async e => {
         } catch {doc.revision--;toast('Could not save: browser storage is full or unavailable. Export JSON instead.');}
         return;
     }
-    if (action === 'undo' && undo.length) {
+    if (action === 'undo' && robotEditable && undo.length) {
         redo.push(clone(doc));
         doc = undo.pop()!;
         simulationDirty = true;
@@ -646,7 +684,7 @@ document.addEventListener('click', async e => {
         render();
         return;
     }
-    if (action === 'redo' && redo.length) {
+    if (action === 'redo' && robotEditable && redo.length) {
         undo.push(clone(doc));
         doc = redo.pop()!;
         simulationDirty = true;
@@ -743,8 +781,9 @@ document.addEventListener('click', async e => {
         return;
     }
     if (action === 'new') {
-        const next=createSeasonRobot($<HTMLSelectElement>('#new-season')?.value ?? 'reefscape-2025');
+        const next=createSeasonRobot($<HTMLSelectElement>('#new-season')?.value ?? librarySeason);
         next.name = 'Untitled robot';
+        next.revision = 0;
         next.subsystems = [];
         next.surfaces = [];
         next.edges = [];
@@ -756,12 +795,13 @@ document.addEventListener('click', async e => {
         load(createSeasonRobot(librarySeason));
         return;
     }
-    if (action.startsWith('open:') || action.startsWith('copy:')) {
+    if (action.startsWith('open:') || action.startsWith('copy:') || action.startsWith('edit:')) {
         try {
             const next = cloudEnabled() ? await cloudRobot(action.slice(5)) : clone(readRobots().find(r => r.document.id === action.slice(5))!.document);
             if (cloudEnabled()) rememberRevision(next);
             if (action.startsWith('copy:')) {next.id = id();next.name += ' copy';next.revision = 0;}
-            load(next);
+            const editable=!cloudEnabled() || action.startsWith('copy:') || robotMetadata.get(next.id)?.createdBy===signedInUser()?.sub;
+            load(next,editable,action.startsWith('open:')?'drive':editable?'edit':'drive');
         } catch (error) {toast(error instanceof Error ? error.message : 'Unable to open robot.');}
         return;
     }
@@ -825,15 +865,8 @@ window.addEventListener('keydown', e => {
     if (capturingBinding) {
         e.preventDefault();
         e.stopImmediatePropagation();
-        const key = normalizeBinding(e.key) ?? normalizeBinding(e.code), capture = capturingBinding;
-        if (!key)
-            return;
-        capturingBinding = undefined;
-        commit(d => {
-            const item = capture.path==='stateEdge.key' ? d.subsystems.find(s=>s.id===capture.id)?.stateTransitions?.find(e=>e.id===stateEdgeSelection) : d.edges.find(s => s.id === capture.id);
-            if (item)
-                item.key = key;
-        });
+        const key=normalizeBinding(e.key)??normalizeBinding(e.code);
+        if(key)captureKey(key);
         return;
     }
     const editing = (e.target as Element).matches('input,select,textarea,[contenteditable="true"]') || $<HTMLDialogElement>('#modal').open;
@@ -869,6 +902,7 @@ window.addEventListener('keyup', e => {
     sendControls();
 });
 function loseFocus() {
+    padControls=gamepadControls();
     keys.clear();
     virtual.clear();
     if (workerReady) send({ type: 'controls', controls: { x: 0, y: 0, turn: 0, held: [] } });
@@ -885,15 +919,15 @@ document.addEventListener('visibilitychange', () => {
     if (document.hidden) loseFocus();
     else if (activeView === 'drive' && !$<HTMLDialogElement>('#modal').open) resumeDrive();
 });
-setInterval(() => {
-    if (mode !== 'running' || isReplay)
-        return;
-    const pad = Array.from(navigator.getGamepads?.() ?? []).find(p => p?.connected);
-    if (!pad)
-        return;
-    const axis = (i: number) => Math.abs(pad.axes[i] ?? 0) > .15 ? pad.axes[i] : 0;
-    sendControls({ x: -axis(1), y: -axis(0), turn: -axis(2), held: ['i', 'j', 'k'].filter((_, i) => pad.buttons[i]?.pressed) });
-}, 33);
+let previousPadHeld=new Set<string>();
+setInterval(()=>{
+    const pad=Array.from(navigator.getGamepads?.()??[]).find(p=>p?.connected);
+    const previous=padControls;padControls=gamepadControls(document.hidden||!document.hasFocus()?undefined:pad);
+    const rising=padControls.held.find(key=>!previousPadHeld.has(key));
+    previousPadHeld=new Set(padControls.held);
+    if(capturingBinding && rising)captureKey(rising);
+    if(mode==='running' && !isReplay && (pad||previous.held.length||previous.x||previous.y||previous.turn))sendControls();
+},33);
 window.addEventListener('gamepaddisconnected', loseFocus);
 render();
 requestAnimationFrame(() => graph.fit());
@@ -918,6 +952,7 @@ function resumeDrive() {
 }
 function setWorkspaceView(view: WorkspaceView) {
     if (!['edit', 'graph', 'drive'].includes(view)) return;
+    if(!robotEditable && view!=='drive')return;
     const previous = activeView;
     activeView = view;
     if (view !== 'drive' && mode !== 'edit') {
@@ -935,11 +970,15 @@ function setWorkspaceView(view: WorkspaceView) {
         tab.setAttribute('aria-selected', String(active));
     });
     viewport?.setDriveView(view === 'drive', driverStation);
-    viewport?.setEditing(view === 'edit' && mode === 'edit');
+    viewport?.setEditing(robotEditable && view === 'edit' && mode === 'edit');
     render();
     if (view === 'drive' && previous !== 'drive') resumeDrive();
     requestAnimationFrame(() => { if (view === 'graph') graph.fit(); });
 }
-setWorkspaceView(activeView);
+setWorkspaceView(robotEditable?activeView:'drive');
+if(cloudEnabled() && !robotEditable){
+    const draftId=doc.id;
+    void cloudRobot(draftId).then(()=>{if(doc.id!==draftId)return;robotEditable=robotMetadata.get(draftId)?.createdBy===signedInUser()?.sub;renderShell();}).catch(()=>{});
+}
 
 document.addEventListener('change',e=>{const input=e.target as HTMLSelectElement;if(input.id==='new-season'){librarySeason=input.value;void showLibrary();}});

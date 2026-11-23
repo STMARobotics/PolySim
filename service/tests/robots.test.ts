@@ -7,6 +7,39 @@ import {TARGETING_MODES} from '../../contracts/targeting';
 import {fixture,request} from './support';
 const key=()=>({'idempotency-key':randomUUID()});
 
+test('custom graph routes and gamepad bindings survive API save and reload in both graphs',async()=>{
+    const f=fixture(),session=await f.login(),document=ensureStates(sampleRobot()),route:[number,number][]=[[240,-96],[576,-96]];
+    document.edges[0].route=route;document.edges[0].labelPosition=.25;document.edges[0].key='gamepad:button:6';
+    const sub=document.subsystems[0],state=addState(document,sub,sub.states![0]);
+    sub.stateTransitions!.push({id:'pad-transition',source:sub.states![0].id,target:state.id,duration:0,key:'gamepad:axis:1:-',trigger:'press',route,labelPosition:.75});
+    const manifest=JSON.parse((await f.app.handle(request('/api/seasons/practice-balls','GET',undefined,session))).body);
+    assert.ok(manifest.capabilities.includes('graph-label-position'));assert.ok(manifest.capabilities.includes('graph-routes'));assert.ok(manifest.capabilities.includes('gamepad-bindings'));
+    const created=await f.app.handle(request('/api/robots','POST',{document},{...session,...key()}));assert.equal(created.statusCode,201);
+    const saved=JSON.parse((await f.app.handle(request('/api/robots/'+document.id,'GET',undefined,session))).body).document;
+    assert.equal(saved.edges[0].labelPosition,.25);assert.equal(saved.subsystems[0].stateTransitions[0].labelPosition,.75);assert.deepEqual(saved.edges[0].route,route);assert.equal(saved.edges[0].key,'gamepad:button:6');
+    assert.deepEqual(saved.subsystems[0].stateTransitions[0].route,route);assert.equal(saved.subsystems[0].stateTransitions[0].key,'gamepad:axis:1:-');
+    const bad={...document,id:randomUUID(),edges:document.edges.map(e=>({...e,route:[[10000,0]]}))};
+    assert.equal((await f.app.handle(request('/api/robots','POST',{document:bad},{...session,...key()}))).statusCode,422);
+    const badLabel={...document,id:randomUUID(),edges:document.edges.map(e=>({...e,labelPosition:1.1}))};
+    assert.equal((await f.app.handle(request('/api/robots','POST',{document:badLabel},{...session,...key()}))).statusCode,422);
+});
+
+test('only the creator can revise a robot; other members can drive and duplicate it',async()=>{
+    const f=fixture(),owner=await f.login(),other=await f.login('other-sub'),admin=await f.login('admin-sub'),document=sampleRobot();
+    assert.equal((await f.app.handle(request('/api/robots','POST',{document},{...owner,...key()}))).statusCode,201);
+    const path=`/api/robots/${document.id}`;
+    const read=await f.app.handle(request(path,'GET',undefined,other));
+    assert.equal(read.statusCode,200);
+    assert.equal(JSON.parse(read.body).metadata.creatorName,'Member');
+    for(const session of [other,admin])assert.equal((await f.app.handle(request(path+'/revisions','POST',{document:{...document,name:'Changed'},expectedRevision:1},{...session,...key()}))).statusCode,403);
+    const copy={...JSON.parse(read.body).document,id:randomUUID(),name:'My copy',revision:0};
+    assert.equal((await f.app.handle(request('/api/robots','POST',{document:copy},{...other,...key()}))).statusCode,201);
+    assert.equal(JSON.parse((await f.app.handle(request(`/api/robots/${copy.id}`,'GET',undefined,other))).body).metadata.createdBy,'other-sub');
+    assert.equal((await f.app.handle(request(path+'/revisions','POST',{document:{...document,name:'Owner edit'},expectedRevision:1},{...owner,...key()}))).statusCode,200);
+    const list=JSON.parse((await f.app.handle(request('/api/robots','GET',undefined,other))).body);
+    assert.equal(list.items.find((r:{id:string})=>r.id===document.id).creatorName,'Member');
+});
+
 test('authenticated API advertises targeting and round-trips all targeting modes and ranges',async()=>{
     const f=fixture(),session=await f.login();
     const manifest=await f.app.handle(request('/api/seasons/practice-balls','GET',undefined,session));

@@ -16,7 +16,7 @@ export function createApplication(config: Config, store: Store, google: GooglePr
         if(path==='/api/robots' || path.startsWith('/api/robots/'))return robots.handle(req);
         if(method==='GET' && (path==='/api/seasons'||path.startsWith('/api/seasons/'))) {
             await auth.session(req);
-            const manifest=(season:typeof seasons[number])=>({...season,engine:ENGINE_VERSION,units:'m',displayUnits:'in',coverage:['Physical field and configurable scoring only; no match rules'],capabilities:['boxes','ball-intake','ball-outtake','timed-transitions','subsystem-states','not-pressed-trigger','subsystem-targeting','season-field-v1','typed-pieces','piece-physics-v2']});
+            const manifest=(season:typeof seasons[number])=>({...season,engine:ENGINE_VERSION,units:'m',displayUnits:'in',coverage:['Physical field and configurable scoring only; no match rules'],capabilities:['graph-label-position','graph-routes','gamepad-bindings','boxes','ball-intake','ball-outtake','timed-transitions','subsystem-states','not-pressed-trigger','subsystem-targeting','season-field-v1','typed-pieces','piece-physics-v2']});
             if(path==='/api/seasons')return response(200,{items:seasons.map(s=>({id:s.id,title:s.title,version:s.version,pieceTypes:s.pieceTypes}))});
             const season=seasons.find(s=>s.id===path.slice('/api/seasons/'.length));if(!season)throw new HttpError(404,'NOT_FOUND','Season not found.');return response(200,manifest(season));
         }

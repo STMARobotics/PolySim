@@ -25,7 +25,7 @@ export function syncDefaults(d:RobotDocument) {
 export function addState(d:RobotDocument,sub:Subsystem,source:SubsystemState) {
     const state={...clone(source),id:id(),name:sub.states!.length===1?'New State':`New ${sub.states!.length} State`,isDefault:false};
     sub.states!.push(state);
-    const index=sub.states!.length-1;sub.stateLayout![state.id]=[40+index%3*250,80+Math.floor(index/3)*230];
+    const index=sub.states!.length-1;sub.stateLayout![state.id]=[48+index%3*288,96+Math.floor(index/3)*240];
     for(const action of d.surfaces.filter(s=>s.owner===sub.id && s.stateId===source.id)) {
         const copy={...clone(action),id:id(),stateId:state.id};d.surfaces.push(copy);
         const links=d.edges.filter(e=>e.source===action.id || e.target===action.id);
