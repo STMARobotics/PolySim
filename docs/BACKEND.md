@@ -14,7 +14,7 @@ Reference: [STMARobotics/fmea-app](https://github.com/STMARobotics/fmea-app), in
 | --- | --- |
 | AWS account | `738044534240` |
 | Backend/frontend region | `us-east-2` |
-| Certificate and CloudFront WAF region | `us-east-1` |
+| Certificate and CloudFront region | `us-east-1` |
 | Application URL | `https://polysim.7028robotics.com` |
 | Route 53 hosted zone | `Z014656337LGZWAE9JKJP` / `7028robotics.com` |
 | Google OAuth client | `574028865613-kh9gccmi9ccfqsv7s89rdttf7cc1ohj4.apps.googleusercontent.com` |
@@ -71,18 +71,18 @@ Errors use `{error:{code,message,details?},requestId}`. Payload/schema errors, f
 
 ## CDK and deployment
 
-The root package contains three stacks: `polysim-certificate`, `polysim-backend`, `polysim-frontend`. Cross-region certificate/WAF references are managed by CDK; no manual certificate ARN copying is needed. None changes FMEA's stacks. The only shared dependency is its existing OAuth SecureString and public OAuth client.
+The root package contains three stacks: `polysim-certificate`, `polysim-backend`, `polysim-frontend`. Cross-region certificate references are managed by CDK; no manual certificate ARN copying is needed. None changes FMEA's stacks. The only shared dependency is its existing OAuth SecureString and public OAuth client.
 
 1. In the existing Google OAuth web client, verify/add the exact redirect URI `https://polysim.7028robotics.com/api/auth/callback`. Keep FMEA's redirect URIs intact. Verify the client remains restricted appropriately to the organization. PolySim always applies its own server-side hosted-domain check.
 2. Authenticate AWS access to account `738044534240`. Both regions must have the CDK bootstrap resources. If absent, an administrator must review and run `npx cdk bootstrap aws://738044534240/us-east-1 aws://738044534240/us-east-2` using the organization's deployment policies.
 3. Run `npm ci`, `npm run verify`, and `node scripts/deployment-preflight.mjs`. Preflight checks only the AWS account and region using `sts:GetCallerIdentity`; it does not request the OAuth secret. The deployed auth role separately needs exact-parameter `ssm:GetParameter` and KMS permissions.
-4. Review `npm run cdk:diff`. Then run `npm run cdk:deploy`. CloudFormation creates billable WAF, CloudFront, API, Lambda, DynamoDB, backup, logs and SNS resources.
+4. Review `npm run cdk:diff`. Then run `npm run cdk:deploy`. CloudFormation creates billable CloudFront, API, Lambda, DynamoDB, logs and SNS resources. PITR and AWS Backup are not created.
 5. Run `node scripts/smoke-production.mjs https://polysim.7028robotics.com`. It checks public gate headers, 401s for unauthenticated APIs and PKCE login redirect/cookie configuration. It does not perform a Google login or verify the authorized redirect registration.
 6. Complete the real-user release checks below and subscribe the operations team to the SNS topic emitted in the backend outputs. Verify delivery with an approved test notification before opening access.
 
 The single `.github/workflows/deploy.yml` workflow matches FMEA's triggers and gates: pushes to every branch and pull requests run validation, pull requests configure the read-only `GitHubAction-PullRequestRole` and run `cdk diff`, and only pushes to `main` build/test/synthesize and deploy with `GitHubAction-AssumeRoleWithAction`. Both role ARNs are checked into the workflow; there are no GitHub repository variables, secrets, or action commit SHA pins. Deployment is automatic only for `main`; branch builds never receive the deployment role. Add AWS IAM trust/policy for the two existing FMEA OIDC roles only if they are not already authorized for `STMARobotics/PolySim`.
 
-The public API has no CORS policy because frontend and API share one origin through CloudFront. API/auth responses use no-store and CloudFront caching is disabled. A private S3 origin uses OAC and TLS. CloudFront applies CSP with WASM support, frame denial, HSTS, no-referrer and disabled camera/microphone/geolocation. WAF rate-limits auth starts and general requests and applies AWS's known-bad-input rule set. API Gateway and Lambda impose additional rate/concurrency limits. Direct API Gateway calls remain authenticated and throttled; WAF applies at CloudFront only.
+The public API has no CORS policy because frontend and API share one origin through CloudFront. API/auth responses use no-store and CloudFront caching is disabled. A private S3 origin uses OAC and TLS. CloudFront applies CSP with WASM support, frame denial, HSTS, no-referrer and disabled camera/microphone/geolocation. API Gateway and Lambda impose rate/concurrency limits. Direct API Gateway calls remain authenticated and throttled.
 
 ## Local development and validation
 
@@ -96,9 +96,11 @@ Local browser QA used a synthetic Google provider in an ignored, loopback-only t
 
 ## Operations, recovery and remaining release gates
 
-Both tables have encryption, point-in-time recovery, deletion protection and retain-on-delete/update-replacement. Robot data also has daily AWS Backup snapshots with 35-day retention in a retained vault. Frontend S3 is private, versioned and retained. Application logs retain one month; API access logs record route keys rather than OAuth query strings. Lambda errors, throttling and high duration plus API 5xx alarms publish to the operations SNS topic. Subscribe operators and verify notifications; creating an unsubscribed topic is not a complete paging setup.
+Both tables have AWS-managed encryption, deletion protection and retain-on-delete/update-replacement. DynamoDB Point-in-Time Recovery (PITR) and AWS Backup are intentionally disabled to minimize fixed and ongoing cost. Frontend S3 is private, versioned and retained with noncurrent versions cleaned after 30 days. Application logs retain one month; API access logs record route keys rather than OAuth query strings. Lambda errors, throttling and high duration plus API 5xx alarms publish to the operations SNS topic. Subscribe operators and verify notifications; creating an unsubscribed topic is not a complete paging setup.
 
-To recover robot data, restore PITR/backup into a **new table**. Inspect revision consistency, then update the stack's data-table binding through a reviewed deployment. Do not delete the original table during recovery. Restoring session data can resurrect revoked sessions: never restore sessions into service without revoking them all. Retaining history has ongoing storage costs; select a separate archive policy before imposing automated deletion. Test restoration and record the measured recovery time before production sign-off; no RPO/RTO has yet been measured.
+Backup cost background: DynamoDB PITR generally costs about $0.20 per GB-month for continuously restored storage in common US regions, with no fixed setup fee and a restore needed for recovery. AWS Backup DynamoDB storage is typically about $0.10 per GB-month for incremental backups, plus restore usage (commonly about $0.15 per GB) and any cross-region transfer. Rates vary by region, backup mode and current AWS pricing, so check the AWS console pricing calculator before enabling either. The 35-day AWS Backup plan previously configured here has no fixed vault fee, but it incurs monthly backup storage and can grow as retained robot revisions grow. PITR and AWS Backup are separate: no PITR means no automatic 35-day second-granularity restore window; no AWS Backup means no independent recovery points.
+
+With no backup enabled, recovery is limited to retained DynamoDB tables, immutable revisions already stored, and manually exported JSON files. There is no accidental data deletion endpoint, but an application or account mistake could still remove or corrupt records. Without PITR/AWS Backup, recovery from such a mistake would require another copy or source. Do not restore session data without revoking sessions first.
 
 Frontend rollback should redeploy a known-good source commit through the same build/deployment flow. Schema v1 is unchanged and revisions remain immutable. Avoid destructive stack replacement. DynamoDB deletion protection and retain policies intentionally require operator intervention for removal.
 
@@ -107,7 +109,7 @@ Release gates still requiring actual AWS/Google access:
 - Verify shared Google client callback registration and secret decryption by the deployed auth role.
 - Complete allowed Workspace login; reject personal Gmail, another Workspace and an email-domain lookalike; check logout/revocation and session expiry.
 - Save/reopen on a second account/device, force a live concurrent revision conflict and retry an ambiguous save. Verify existing immutable revisions remain intact.
-- Confirm DynamoDB transaction/IAM behavior, CloudFront cookies/no-store behavior, WAF and CSP including the worker, Route 53 and ACM validation.
+- Confirm DynamoDB transaction/IAM behavior, CloudFront cookies/no-store behavior, CSP including the worker, Route 53 and ACM validation.
 - Subscribe/test operational alerts and complete/record a backup restore drill.
 - Review dependency advisories and deployment diff; verify costs, quota headroom and the approved admin subject list.
 

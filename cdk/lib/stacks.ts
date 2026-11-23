@@ -12,26 +12,18 @@ import * as logs from 'aws-cdk-lib/aws-logs';
 import * as cw from 'aws-cdk-lib/aws-cloudwatch';
 import * as actions from 'aws-cdk-lib/aws-cloudwatch-actions';
 import * as sns from 'aws-cdk-lib/aws-sns';
-import * as backup from 'aws-cdk-lib/aws-backup';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as deploy from 'aws-cdk-lib/aws-s3-deployment';
 import * as cf from 'aws-cdk-lib/aws-cloudfront';
 import * as origins from 'aws-cdk-lib/aws-cloudfront-origins';
-import * as waf from 'aws-cdk-lib/aws-wafv2';
 import { resolve } from 'node:path';
 import { production as config } from './config';
 export class CertificateStack extends cdk.Stack {
     readonly certificate: acm.Certificate;
-    readonly firewall: waf.CfnWebACL;
     constructor(scope: Construct, id: string, props: cdk.StackProps) {
         super(scope,id,props);
         const zone=route53.HostedZone.fromHostedZoneAttributes(this,'Zone',{hostedZoneId:config.hostedZoneId,zoneName:config.domainName});
         this.certificate=new acm.Certificate(this,'Certificate',{domainName:config.hostname,validation:acm.CertificateValidation.fromDns(zone)});
-        this.firewall=new waf.CfnWebACL(this,'Firewall',{scope:'CLOUDFRONT',defaultAction:{allow:{}},visibilityConfig:{cloudWatchMetricsEnabled:true,metricName:'PolySimFirewall',sampledRequestsEnabled:false},rules:[
-            {name:'LoginRate',priority:0,action:{block:{}},statement:{rateBasedStatement:{limit:100,aggregateKeyType:'IP',scopeDownStatement:{byteMatchStatement:{fieldToMatch:{uriPath:{}},positionalConstraint:'STARTS_WITH',searchString:'/api/auth/start',textTransformations:[{priority:0,type:'NONE'}]}}}},visibilityConfig:{cloudWatchMetricsEnabled:true,metricName:'PolySimLoginRate',sampledRequestsEnabled:false}},
-            {name:'RequestRate',priority:1,action:{block:{}},statement:{rateBasedStatement:{limit:2000,aggregateKeyType:'IP'}},visibilityConfig:{cloudWatchMetricsEnabled:true,metricName:'PolySimRequestRate',sampledRequestsEnabled:false}},
-            {name:'KnownBadInputs',priority:2,overrideAction:{none:{}},statement:{managedRuleGroupStatement:{vendorName:'AWS',name:'AWSManagedRulesKnownBadInputsRuleSet'}},visibilityConfig:{cloudWatchMetricsEnabled:true,metricName:'PolySimKnownBadInputs',sampledRequestsEnabled:false}},
-        ]});
     }
 }
 export class BackendStack extends cdk.Stack {
@@ -43,15 +35,11 @@ export class BackendStack extends cdk.Stack {
         const table=(name: string,ttl=false)=>new ddb.Table(this,name,{
             partitionKey:{name:'pk',type:ddb.AttributeType.STRING},sortKey:{name:'sk',type:ddb.AttributeType.STRING},
             billingMode:ddb.BillingMode.PAY_PER_REQUEST,encryption:ddb.TableEncryption.AWS_MANAGED,
-            pointInTimeRecoverySpecification:{pointInTimeRecoveryEnabled:true},deletionProtection:true,
+            pointInTimeRecoverySpecification:{pointInTimeRecoveryEnabled:false},deletionProtection:true,
             removalPolicy:cdk.RemovalPolicy.RETAIN,...(ttl?{timeToLiveAttribute:'ttl'}:{}),
         });
         const data=table('RobotData',true),sessions=table('Sessions',true);
         data.addGlobalSecondaryIndex({indexName:'GSI1',partitionKey:{name:'gsi1pk',type:ddb.AttributeType.STRING},sortKey:{name:'gsi1sk',type:ddb.AttributeType.STRING},projectionType:ddb.ProjectionType.ALL});
-        const vault=new backup.BackupVault(this,'BackupVault',{removalPolicy:cdk.RemovalPolicy.RETAIN});
-        const plan=new backup.BackupPlan(this,'Backups',{backupVault:vault});
-        plan.addRule(new backup.BackupPlanRule({ruleName:'Daily35Days',scheduleExpression:cdk.aws_events.Schedule.cron({hour:'5',minute:'0'}),deleteAfter:cdk.Duration.days(35)}));
-        plan.addSelection('RobotData',{resources:[backup.BackupResource.fromDynamoDbTable(data)]});
         this.alarms=new sns.Topic(this,'OperationsAlerts',{enforceSSL:true});
         const alarm=(id: string, metric:cw.IMetric,threshold=1)=>{
             const a=new cw.Alarm(this,id,{metric,threshold,evaluationPeriods:1,treatMissingData:cw.TreatMissingData.NOT_BREACHING});a.addAlarmAction(new actions.SnsAction(this.alarms));
@@ -99,14 +87,14 @@ export class FrontendStack extends cdk.Stack {
     readonly distribution: cf.Distribution;
     constructor(scope: Construct,id: string,props:cdk.StackProps & {backend:BackendStack;edge:CertificateStack}) {
         super(scope,id,props);
-        const site=new s3.Bucket(this,'Site',{blockPublicAccess:s3.BlockPublicAccess.BLOCK_ALL,encryption:s3.BucketEncryption.S3_MANAGED,enforceSSL:true,versioned:true,removalPolicy:cdk.RemovalPolicy.RETAIN});
+        const site=new s3.Bucket(this,'Site',{blockPublicAccess:s3.BlockPublicAccess.BLOCK_ALL,encryption:s3.BucketEncryption.S3_MANAGED,enforceSSL:true,versioned:true,removalPolicy:cdk.RemovalPolicy.RETAIN,lifecycleRules:[{noncurrentVersionExpiration:cdk.Duration.days(30),abortIncompleteMultipartUploadAfter:cdk.Duration.days(7)}]});
         const headers=new cf.ResponseHeadersPolicy(this,'SecurityHeaders',{securityHeadersBehavior:{
             contentSecurityPolicy:{override:true,contentSecurityPolicy:"default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; upgrade-insecure-requests"},
             contentTypeOptions:{override:true},frameOptions:{override:true,frameOption:cf.HeadersFrameOption.DENY},referrerPolicy:{override:true,referrerPolicy:cf.HeadersReferrerPolicy.NO_REFERRER},
             strictTransportSecurity:{override:true,accessControlMaxAge:cdk.Duration.days(365),includeSubdomains:false,preload:false},
         },customHeadersBehavior:{customHeaders:[{header:'Permissions-Policy',value:'camera=(), microphone=(), geolocation=()',override:true}]}});
         this.distribution=new cf.Distribution(this,'Distribution',{
-            domainNames:[config.hostname],certificate:props.edge.certificate,webAclId:props.edge.firewall.attrArn,
+            domainNames:[config.hostname],certificate:props.edge.certificate,
             defaultRootObject:'index.html',minimumProtocolVersion:cf.SecurityPolicyProtocol.TLS_V1_2_2021,
             defaultBehavior:{origin:origins.S3BucketOrigin.withOriginAccessControl(site),viewerProtocolPolicy:cf.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,allowedMethods:cf.AllowedMethods.ALLOW_GET_HEAD,cachePolicy:cf.CachePolicy.CACHING_DISABLED,responseHeadersPolicy:headers,compress:true},
         });

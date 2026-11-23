@@ -16,11 +16,12 @@ test('deployment coordinates and Google configuration while resources are isolat
     b.hasResourceProperties('AWS::Lambda::Function',{Runtime:'nodejs24.x',Architectures:['arm64'],Environment:{Variables:Match.objectLike({APP_ORIGIN:'https://polysim.7028robotics.com',ALLOWED_DOMAIN:'stmarobotics.org',GOOGLE_SECRET_PARAMETER:production.googleSecretParameter,ADMIN_EMAILS:'zack.osowski@stmarobotics.org,andy.gasser@stmarobotics.org'})}});
     e.hasResourceProperties('AWS::CertificateManager::Certificate',{DomainName:'polysim.7028robotics.com',ValidationMethod:'DNS'});
 });
-test('both DynamoDB tables have retention, encryption, PITR and deletion protection; data has a paginated index and backups',()=>{
+test('both DynamoDB tables have retention, encryption, deletion protection and no paid backup features',()=>{
     const tables=b.findResources('AWS::DynamoDB::Table');assert.equal(Object.keys(tables).length,2);
-    for(const table of Object.values(tables)) {assert.equal(table.DeletionPolicy,'Retain');assert.equal(table.UpdateReplacePolicy,'Retain');assert.equal(table.Properties.DeletionProtectionEnabled,true);assert.equal(table.Properties.PointInTimeRecoverySpecification.PointInTimeRecoveryEnabled,true);assert.equal(table.Properties.SSESpecification.SSEEnabled,true);assert.equal(table.Properties.TimeToLiveSpecification.AttributeName,'ttl');}
+    for(const table of Object.values(tables)) {assert.equal(table.DeletionPolicy,'Retain');assert.equal(table.UpdateReplacePolicy,'Retain');assert.equal(table.Properties.DeletionProtectionEnabled,true);assert.equal(table.Properties.PointInTimeRecoverySpecification.PointInTimeRecoveryEnabled,false);assert.equal(table.Properties.SSESpecification.SSEEnabled,true);assert.equal(table.Properties.TimeToLiveSpecification.AttributeName,'ttl');}
     b.hasResourceProperties('AWS::DynamoDB::Table',{GlobalSecondaryIndexes:Match.arrayWith([Match.objectLike({IndexName:'GSI1'})])});
-    b.resourceCountIs('AWS::Backup::BackupPlan',1);b.resourceCountIs('AWS::Backup::BackupSelection',1);
+    assert.equal(Object.keys(b.findResources('AWS::Backup::BackupPlan')).length,0);
+    assert.equal(Object.keys(b.findResources('AWS::Backup::BackupVault')).length,0);
 });
 test('Lambda permissions contain no scans and give only the auth role access to the OAuth secret',()=>{
     const policies=b.findResources('AWS::IAM::Policy');
@@ -31,14 +32,14 @@ test('Lambda permissions contain no scans and give only the auth role access to 
     const decrypt=grants.filter(({statement})=>JSON.stringify(statement.Action).includes('kms:Decrypt'));
     assert.equal(decrypt.length,1);assert.ok(decrypt[0].statement.Condition.StringEquals['kms:EncryptionContext:PARAMETER_ARN']);
 });
-test('CloudFront keeps the bucket private and never caches auth or API responses; security headers and WAF are enforced',()=>{
-    f.hasResourceProperties('AWS::S3::Bucket',{PublicAccessBlockConfiguration:{BlockPublicAcls:true,BlockPublicPolicy:true,IgnorePublicAcls:true,RestrictPublicBuckets:true},VersioningConfiguration:{Status:'Enabled'}});
+test('CloudFront keeps the bucket private and never caches auth or API responses; security headers are enforced without WAF',()=>{
+    f.hasResourceProperties('AWS::S3::Bucket',{PublicAccessBlockConfiguration:{BlockPublicAcls:true,BlockPublicPolicy:true,IgnorePublicAcls:true,RestrictPublicBuckets:true},VersioningConfiguration:{Status:'Enabled'},LifecycleConfiguration:{Rules:[Match.objectLike({Status:'Enabled'})]}});
     f.hasResourceProperties('AWS::CloudFront::OriginAccessControl',{OriginAccessControlConfig:Match.objectLike({SigningBehavior:'always',SigningProtocol:'sigv4'})});
     const dist=Object.values(f.findResources('AWS::CloudFront::Distribution'))[0].Properties.DistributionConfig;
-    assert.ok(dist.WebACLId);const api=dist.CacheBehaviors.find((r:any)=>r.PathPattern==='/api/*');assert.ok(api);assert.equal(api.CachePolicyId,'4135ea2d-6df8-44a3-9df3-4b5a84be39ad');
+    assert.equal(dist.WebACLId,undefined);const api=dist.CacheBehaviors.find((r:any)=>r.PathPattern==='/api/*');assert.ok(api);assert.equal(api.CachePolicyId,'4135ea2d-6df8-44a3-9df3-4b5a84be39ad');
     assert.equal(api.ViewerProtocolPolicy,'https-only');assert.ok(api.AllowedMethods.includes('POST'));
     f.hasResourceProperties('AWS::CloudFront::ResponseHeadersPolicy',{ResponseHeadersPolicyConfig:{SecurityHeadersConfig:Match.objectLike({ContentSecurityPolicy:Match.objectLike({Override:true}),FrameOptions:{FrameOption:'DENY',Override:true}})}});
-    e.hasResourceProperties('AWS::WAFv2::WebACL',{Scope:'CLOUDFRONT',VisibilityConfig:{SampledRequestsEnabled:false,CloudWatchMetricsEnabled:true,MetricName:'PolySimFirewall'}});
+    assert.equal(Object.keys(e.findResources('AWS::WAFv2::WebACL')).length,0);
 });
 test('focused API routes cover auth, versioned robot storage and read-only seasons with logging and alarms',()=>{
     const routes=Object.values(b.findResources('AWS::ApiGatewayV2::Route')).map(r=>r.Properties.RouteKey);

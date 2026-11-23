@@ -329,7 +329,7 @@ Commit a revision and update the current-revision pointer atomically with a cond
 
 Keep robot documents within an explicit serialized size budget, initially proposed at 250 KiB including a reserve for database attribute overhead. Enforce limits on nodes, edges, and strings. If realistic models exceed that budget, move immutable definition bodies to private S3 before raising limits. Keep large input streams, trajectories, and replay snapshots in private S3; database records reference object keys and hashes. Use short-lived authorized upload/download URLs and a finalize step that checks size, type, ownership, and existence.
 
-Retain production data on stack deletion, enable backups and point-in-time recovery, and retain revisions. Archive robots instead of destructive deletion. Keep backups and run artifacts under an explicit retention policy chosen during deployment.
+Retain production data on stack deletion and retain revisions. Archive robots instead of destructive deletion. DynamoDB PITR and AWS Backup are currently disabled to minimize cost; do not enable paid backup features unless the user confirms the recovery requirement and cost.
 
 ### API surface
 

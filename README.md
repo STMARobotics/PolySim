@@ -40,7 +40,7 @@ Run `npm run benchmark:piles` for crowded 18/36-piece contact cases. The reprodu
 
 ## Hosted backend
 
-Deployment target: **https://polysim.7028robotics.com**, AWS account **738044534240**, backend region **us-east-2**, CloudFront certificate/WAF region **us-east-1**. This matches FMEA's public deployment coordinates and reuses its OAuth client and `/polysim/google-client-secret` SecureString. PolySim has independent stacks, tables, sessions and frontend storage.
+Deployment target: **https://polysim.7028robotics.com**, AWS account **738044534240**, backend region **us-east-2**, CloudFront certificate region **us-east-1**. This matches FMEA's public deployment coordinates and reuses its OAuth client and `/polysim/google-client-secret` SecureString. PolySim has independent stacks, tables, sessions and frontend storage.
 
 ```sh
 npm ci
@@ -113,7 +113,7 @@ In Practice Lab, the raised blue basket is a one-point target. Launch speed/dire
 | `seasons/` | Bundled trusted practice fixture and guided sample |
 | `ui/` | App shell, local persistence, inspectors, SVG graph and Three.js adapter |
 | `service/` | OIDC, opaque sessions, schema validation and versioned robot API; isolated local adapter |
-| `cdk/` | Independent PolySim certificate/WAF, backend and frontend stacks |
+| `cdk/` | Independent PolySim certificate, backend and frontend stacks |
 | `scripts/` | Backend bundling, offline server, deployment preflight and smoke checks |
 | `tests/` | Deterministic graph and physical integration fixtures |
 | `docs/` | Supplied design reference, model limits and implementation status |
