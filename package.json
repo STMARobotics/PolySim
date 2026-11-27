@@ -29,7 +29,7 @@
     "build:frontend": "vite build"
   },
   "dependencies": {
-    "@aws-sdk/client-dynamodb": "^3.1174.0",
+    "@aws-sdk/client-dynamodb": "^3.1176.0",
     "@aws-sdk/client-ssm": "^3.1174.0",
     "@aws-sdk/client-sts": "^3.1174.0",
     "@aws-sdk/lib-dynamodb": "^3.1174.0",
